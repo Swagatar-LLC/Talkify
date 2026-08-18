@@ -1,0 +1,8 @@
+// Swagatar fork release overrides (ADR 9000). Applied only by
+// release/swagatar-release.sh; the committed project keeps upstream's
+// identity so every commit stays an upstream PR candidate.
+
+PRODUCT_BUNDLE_IDENTIFIER = co.swagatar.Talkify
+DEVELOPMENT_TEAM = 37CS47385R
+CODE_SIGN_STYLE = Manual
+CODE_SIGN_IDENTITY = Developer ID Application
