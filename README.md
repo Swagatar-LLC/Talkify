@@ -158,6 +158,17 @@ words exactly as spoken. After you release, the island stays up and the same
 caption names the prompt while the rewrite runs. Shaping is a beta and fails
 safe: any error, or an answer slower than ten seconds, inserts your raw words
 unchanged, history keeps what you actually said, and nothing leaves your Mac.
+## Teach it your words
+
+Apple Speech has never heard your colleague's name, your product's, or your
+codebase's. It guesses, and it guesses the same way every session. Type those
+words into **Settings → Vocabulary** and the recognizer is told to expect them
+before you speak.
+
+This biases recognition rather than editing text afterwards. Nothing is
+rewritten after the fact, so a word on the list can only become more likely,
+never substituted into something you said. Up to 100 words, which is Apple's
+limit, kept on this Mac.
 
 ## Two languages, two triggers
 
