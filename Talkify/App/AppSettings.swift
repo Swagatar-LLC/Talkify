@@ -38,6 +38,7 @@ final class AppSettings {
     static let transcriptFolder = "transcriptFolder"
     static let insertionDestination = "dictationInsertionDestination"
     static let hudClearsMenuBar = "hudClearsMenuBar"
+    static let vocabularyTerms = "vocabularyTerms"
     static let historyEnabled = "dictationHistoryEnabled"
     static let historyFolder = "dictationHistoryFolder"
     static let promptShapingEnabled = "dictationPromptShapingEnabled"
@@ -205,6 +206,15 @@ final class AppSettings {
     didSet { defaults.set(hudClearsMenuBar, forKey: Keys.hudClearsMenuBar) }
   }
 
+  /// Words Apple Speech is told to expect, in the order they were added.
+  ///
+  /// Stored here with every other preference rather than in a document of its
+  /// own: it is at most 100 short strings, and UserDefaults is where the rest
+  /// of this app's settings live.
+  var vocabularyTerms: [String] {
+    didSet { defaults.set(vocabularyTerms, forKey: Keys.vocabularyTerms) }
+  }
+
   var readAloudVoiceID: String {
     didSet { defaults.set(readAloudVoiceID, forKey: Keys.readAloudVoice) }
   }
@@ -349,6 +359,11 @@ final class AppSettings {
     hudScale = defaults.object(forKey: Keys.hudScale) as? Double
       ?? Double(HUDMetrics.maximumScale)
     hudClearsMenuBar = defaults.bool(forKey: Keys.hudClearsMenuBar)
+    // Sanitized on the way in: an older build may have written more terms,
+    // longer ones, or duplicates.
+    vocabularyTerms = Vocabulary.sanitized(
+      defaults.stringArray(forKey: Keys.vocabularyTerms) ?? []
+    )
     readAloudVoiceID = defaults.string(forKey: Keys.readAloudVoice) ?? ""
     readAloudTranslates = defaults.bool(forKey: Keys.readAloudTranslates)
     dictationTriggerBinding = Self.storedBinding(
