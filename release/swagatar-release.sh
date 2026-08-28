@@ -133,10 +133,27 @@ publish() {
 </rss>
 XML
 
+  # Release notes accumulate in fork-unreleased.md as changes land, so a
+  # release ships the changelog that was written next to the work instead of
+  # one reconstructed from git log at publish time.
+  local notes_file="docs/release-notes/fork-unreleased.md"
+  local disclaimer notes
+  disclaimer="Swagatar fork build of Talkify at $(git rev-parse --short HEAD). Not an upstream release."
+  if [[ -s "$notes_file" ]]; then
+    notes="$(cat "$notes_file")"$'\n\n'"$disclaimer"
+  else
+    notes="$disclaimer"
+  fi
+
   gh release create "swagatar-v$VERSION" --repo Swagatar-LLC/Talkify \
     --title "Swagatar fork v$VERSION" \
-    --notes "Swagatar fork build of Talkify at $(git rev-parse --short HEAD). Not an upstream release." \
+    --notes "$notes" \
     "$dmg" "$staging/appcast.xml"
+
+  if [[ -s "$notes_file" ]]; then
+    mv "$notes_file" "docs/release-notes/fork-$VERSION.md"
+    echo "notes archived as docs/release-notes/fork-$VERSION.md; commit that rename"
+  fi
   echo "published swagatar-v$VERSION; feed: $FEED_URL"
 }
 
