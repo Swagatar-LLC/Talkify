@@ -1,0 +1,539 @@
+{
+  "about" : "Held-out corpus for the shaping vocabulary eval. Each case's reference is what was said; heard is what SpeechTranscriber wrote for it, synthesized with the named say voice. Regenerate heard with scripts/transcribe-shaping-eval-corpus.swift. Learned variants came from a separate training set (Samantha voice, different sentences), so no case here was used to pick them or to tune the candidate thresholds.",
+  "cases" : [
+    {
+      "heard" : "Swagger paid the domain renewal yesterday.",
+      "id" : "term-01",
+      "kind" : "term",
+      "reference" : "Swagatar paid the domain renewal yesterday.",
+      "voice" : "Karen"
+    },
+    {
+      "heard" : "Book the Swagger logo on the 1st slide.",
+      "id" : "term-02",
+      "kind" : "term",
+      "reference" : "Put the Swagatar logo on the first slide.",
+      "voice" : "Moira"
+    },
+    {
+      "heard" : "Did talk if I paste that into the right window?",
+      "id" : "term-03",
+      "kind" : "term",
+      "reference" : "Did Talkify paste that into the right window?",
+      "voice" : "Rishi"
+    },
+    {
+      "heard" : "Truckify needs a better way to learn names.",
+      "id" : "term-04",
+      "kind" : "term",
+      "reference" : "Talkify needs a better way to learn names.",
+      "voice" : "Evan (Enhanced)"
+    },
+    {
+      "heard" : "Wren, add a reminder to call the plumber.",
+      "id" : "term-05",
+      "kind" : "term",
+      "reference" : "Wren, add a reminder to call the plumber.",
+      "voice" : "Allison (Enhanced)"
+    },
+    {
+      "heard" : "I asked Ren to summarize the meeting notes.",
+      "id" : "term-06",
+      "kind" : "term",
+      "reference" : "I asked Wren to summarize the meeting notes.",
+      "voice" : "Joelle (Enhanced)"
+    },
+    {
+      "heard" : "Never signed, should forget the old phone number.",
+      "id" : "term-07",
+      "kind" : "term",
+      "reference" : "Mnemosyne should forget the old phone number.",
+      "voice" : "Reed (English (US))"
+    },
+    {
+      "heard" : "Backup memo signed before the upgrade.",
+      "id" : "term-08",
+      "kind" : "term",
+      "reference" : "Back up Mnemosyne before the upgrade.",
+      "voice" : "Karen"
+    },
+    {
+      "heard" : "Chaunike replied to the issue within an hour.",
+      "id" : "term-09",
+      "kind" : "term",
+      "reference" : "Tornike replied to the issue within an hour.",
+      "voice" : "Moira"
+    },
+    {
+      "heard" : "Send Don Ike a thank you note for the review.",
+      "id" : "term-10",
+      "kind" : "term",
+      "reference" : "Send Tornike a thank you note for the review.",
+      "voice" : "Rishi"
+    },
+    {
+      "heard" : "Pushover woke me up at 3 in the morning.",
+      "id" : "term-11",
+      "kind" : "term",
+      "reference" : "Pushover woke me up at three in the morning.",
+      "voice" : "Evan (Enhanced)"
+    },
+    {
+      "heard" : "You would push over during the family dinner.",
+      "id" : "term-12",
+      "kind" : "term",
+      "reference" : "Mute Pushover during the family dinner.",
+      "voice" : "Allison (Enhanced)"
+    },
+    {
+      "heard" : "Tail scale says the desktop has been offline since noon.",
+      "id" : "term-13",
+      "kind" : "term",
+      "reference" : "Tailscale says the desktop has been offline since noon.",
+      "voice" : "Joelle (Enhanced)"
+    },
+    {
+      "heard" : "Add the new server to tail scale tonight.",
+      "id" : "term-14",
+      "kind" : "term",
+      "reference" : "Add the new server to Tailscale tonight.",
+      "voice" : "Reed (English (US))"
+    },
+    {
+      "heard" : "Your version asked for the slides by Wednesday.",
+      "id" : "term-15",
+      "kind" : "term",
+      "reference" : "YouVersion asked for the slides by Wednesday.",
+      "voice" : "Karen"
+    },
+    {
+      "heard" : "A UVession contract renews in March.",
+      "id" : "term-16",
+      "kind" : "term",
+      "reference" : "The YouVersion contract renews in March.",
+      "voice" : "Moira"
+    },
+    {
+      "heard" : "Chainbuilder imported the supplier list without errors.",
+      "id" : "term-17",
+      "kind" : "term",
+      "reference" : "ChainBuilder imported the supplier list without errors.",
+      "voice" : "Rishi"
+    },
+    {
+      "heard" : "Show the chain builder dashboard to the new client.",
+      "id" : "term-18",
+      "kind" : "term",
+      "reference" : "Show the ChainBuilder dashboard to the new client.",
+      "voice" : "Evan (Enhanced)"
+    },
+    {
+      "heard" : "Borno kept forgetting which session was active.",
+      "id" : "term-19",
+      "kind" : "term",
+      "reference" : "Vorno kept forgetting which session was active.",
+      "voice" : "Allison (Enhanced)"
+    },
+    {
+      "heard" : "Nobody has opened for knowing weeks.",
+      "id" : "term-20",
+      "kind" : "term",
+      "reference" : "Nobody has opened Vorno in weeks.",
+      "voice" : "Joelle (Enhanced)"
+    },
+    {
+      "heard" : "Tornet Gamorelli maintains the original project.",
+      "id" : "term-21",
+      "kind" : "term",
+      "reference" : "Tornike Gomareli maintains the original project.",
+      "voice" : "Reed (English (US))"
+    },
+    {
+      "heard" : "I emailed Gamerrily about the release nodes.",
+      "id" : "term-22",
+      "kind" : "term",
+      "reference" : "I emailed Gomareli about the release notes.",
+      "voice" : "Karen"
+    },
+    {
+      "heard" : "Moved that task into to-doist for Friday.",
+      "id" : "term-23",
+      "kind" : "term",
+      "reference" : "Move that task into Todoist for Friday.",
+      "voice" : "Moira"
+    },
+    {
+      "heard" : "always shows 12 overdue tasks.",
+      "id" : "term-24",
+      "kind" : "term",
+      "reference" : "Todoist shows twelve overdue tasks.",
+      "voice" : "Rishi"
+    },
+    {
+      "heard" : "Hermes restarted the gateway after the update.",
+      "id" : "term-25",
+      "kind" : "term",
+      "reference" : "Hermes restarted the gateway after the update.",
+      "voice" : "Evan (Enhanced)"
+    },
+    {
+      "heard" : "Ask Hermes to list the scheduled jobs.",
+      "id" : "term-26",
+      "kind" : "term",
+      "reference" : "Ask Hermes to list the scheduled jobs.",
+      "voice" : "Allison (Enhanced)"
+    },
+    {
+      "heard" : "Sparkle found a new version of the app.",
+      "id" : "term-27",
+      "kind" : "term",
+      "reference" : "Sparkle found a new version of the app.",
+      "voice" : "Joelle (Enhanced)"
+    },
+    {
+      "heard" : "The sparkle feed still points at the old release.",
+      "id" : "term-28",
+      "kind" : "term",
+      "reference" : "The Sparkle feed still points at the old release.",
+      "voice" : "Reed (English (US))"
+    },
+    {
+      "heard" : "Rensing the to-doist project last night.",
+      "id" : "term-29",
+      "kind" : "term",
+      "reference" : "Wren synced the Todoist project last night.",
+      "voice" : "Karen"
+    },
+    {
+      "heard" : "Send the chainbuilder alert through pushover.",
+      "id" : "term-30",
+      "kind" : "term",
+      "reference" : "Send the ChainBuilder alert through Pushover.",
+      "voice" : "Moira"
+    },
+    {
+      "heard" : "My brother is a pushover when the kids ask for candy.",
+      "id" : "keep-01",
+      "kind" : "mustNotChange",
+      "reference" : "My brother is a pushover when the kids ask for candy.",
+      "voice" : "Rishi"
+    },
+    {
+      "heard" : "wren built a nest in the mailbox.",
+      "id" : "keep-02",
+      "kind" : "mustNotChange",
+      "reference" : "A wren built a nest in the mailbox.",
+      "voice" : "Evan (Enhanced)"
+    },
+    {
+      "heard" : "Their runs were loud this morning.",
+      "id" : "keep-03",
+      "kind" : "mustNotChange",
+      "reference" : "The wrens were loud this morning.",
+      "voice" : "Allison (Enhanced)"
+    },
+    {
+      "heard" : "Let me talk if I may.",
+      "id" : "keep-04",
+      "kind" : "mustNotChange",
+      "reference" : "Let me talk if I may.",
+      "voice" : "Joelle (Enhanced)"
+    },
+    {
+      "heard" : "He walked in with more swagger than usual.",
+      "id" : "keep-05",
+      "kind" : "mustNotChange",
+      "reference" : "He walked in with more swagger than usual.",
+      "voice" : "Reed (English (US))"
+    },
+    {
+      "heard" : "The guitar needs new strings.",
+      "id" : "keep-06",
+      "kind" : "mustNotChange",
+      "reference" : "The guitar needs new strings.",
+      "voice" : "Karen"
+    },
+    {
+      "heard" : "The lizard lost her tail scale in the fight.",
+      "id" : "keep-07",
+      "kind" : "mustNotChange",
+      "reference" : "The lizard lost a tail scale in the fight.",
+      "voice" : "Moira"
+    },
+    {
+      "heard" : "Which version did you install?",
+      "id" : "keep-08",
+      "kind" : "mustNotChange",
+      "reference" : "Which version did you install?",
+      "voice" : "Rishi"
+    },
+    {
+      "heard" : "Your version is newer than mine.",
+      "id" : "keep-09",
+      "kind" : "mustNotChange",
+      "reference" : "Your version is newer than mine.",
+      "voice" : "Evan (Enhanced)"
+    },
+    {
+      "heard" : "The chain built her soul does a stronger anchor.",
+      "id" : "keep-10",
+      "kind" : "mustNotChange",
+      "reference" : "The chain builder sold us a stronger anchor.",
+      "voice" : "Allison (Enhanced)"
+    },
+    {
+      "heard" : "That tour gets saved his leg.",
+      "id" : "keep-11",
+      "kind" : "mustNotChange",
+      "reference" : "That tourniquet saved his leg.",
+      "voice" : "Joelle (Enhanced)"
+    },
+    {
+      "heard" : "The mimosa branch starts at 11.",
+      "id" : "keep-12",
+      "kind" : "mustNotChange",
+      "reference" : "The mimosa brunch starts at eleven.",
+      "voice" : "Reed (English (US))"
+    },
+    {
+      "heard" : "The sun made the water sparkle.",
+      "id" : "keep-13",
+      "kind" : "mustNotChange",
+      "reference" : "The sun made the water sparkle.",
+      "voice" : "Karen"
+    },
+    {
+      "heard" : "In the myth, Fermes carried messages for the gods.",
+      "id" : "keep-14",
+      "kind" : "mustNotChange",
+      "reference" : "In the myth, Hermes carried messages for the gods.",
+      "voice" : "Moira"
+    },
+    {
+      "heard" : "push over the boxes so I can sit down.",
+      "id" : "keep-15",
+      "kind" : "mustNotChange",
+      "reference" : "Push over the boxes so I can sit down.",
+      "voice" : "Rishi"
+    },
+    {
+      "heard" : "The tour knee brace needs replacing.",
+      "id" : "keep-16",
+      "kind" : "mustNotChange",
+      "reference" : "The torn knee brace needs replacing.",
+      "voice" : "Evan (Enhanced)"
+    },
+    {
+      "heard" : "Add it to the later list.",
+      "id" : "keep-17",
+      "kind" : "mustNotChange",
+      "reference" : "Add it to the to do list.",
+      "voice" : "Allison (Enhanced)"
+    },
+    {
+      "heard" : "The tail lights on the truck are out.",
+      "id" : "keep-18",
+      "kind" : "mustNotChange",
+      "reference" : "The tail lights on the truck are out.",
+      "voice" : "Joelle (Enhanced)"
+    },
+    {
+      "heard" : "The new version fixed the crash on launch.",
+      "id" : "keep-19",
+      "kind" : "mustNotChange",
+      "reference" : "The new version fixed the crash on launch.",
+      "voice" : "Reed (English (US))"
+    },
+    {
+      "heard" : "Call the dentist and move my cleaning to Thursday.",
+      "id" : "keep-20",
+      "kind" : "mustNotChange",
+      "reference" : "Call the dentist and move my cleaning to Thursday.",
+      "voice" : "Karen"
+    },
+    {
+      "heard" : "The meeting ran long again.",
+      "id" : "keep-21",
+      "kind" : "mustNotChange",
+      "reference" : "The meeting ran long again.",
+      "voice" : "Moira"
+    },
+    {
+      "heard" : "What time does the game start tonight?",
+      "id" : "keep-22",
+      "kind" : "mustNotChange",
+      "reference" : "What time does the game start tonight?",
+      "voice" : "Rishi"
+    },
+    {
+      "heard" : "Pick up milk, bread, and coffee on the way home.",
+      "id" : "keep-23",
+      "kind" : "mustNotChange",
+      "reference" : "Pick up milk, bread, and coffee on the way home.",
+      "voice" : "Evan (Enhanced)"
+    },
+    {
+      "heard" : "The printer upstairs is out of toner.",
+      "id" : "keep-24",
+      "kind" : "mustNotChange",
+      "reference" : "The printer upstairs is out of toner.",
+      "voice" : "Allison (Enhanced)"
+    },
+    {
+      "heard" : "Our flight was delayed by 2 hours.",
+      "id" : "keep-25",
+      "kind" : "mustNotChange",
+      "reference" : "Our flight was delayed by two hours.",
+      "voice" : "Joelle (Enhanced)"
+    },
+    {
+      "heard" : "Sam wants tacos for the anniversary dinner.",
+      "id" : "keep-26",
+      "kind" : "mustNotChange",
+      "reference" : "Sam wants tacos for the anniversary dinner.",
+      "voice" : "Reed (English (US))"
+    },
+    {
+      "heard" : "Please forward the slides be for lunch.",
+      "id" : "keep-27",
+      "kind" : "mustNotChange",
+      "reference" : "Please forward the slides before lunch.",
+      "voice" : "Karen"
+    },
+    {
+      "heard" : "Turn the music down a little.",
+      "id" : "keep-28",
+      "kind" : "mustNotChange",
+      "reference" : "Turn the music down a little.",
+      "voice" : "Moira"
+    },
+    {
+      "heard" : "I renewed the lease for another year.",
+      "id" : "keep-29",
+      "kind" : "mustNotChange",
+      "reference" : "I renewed the lease for another year.",
+      "voice" : "Rishi"
+    },
+    {
+      "heard" : "We ordered more mimosas for the table.",
+      "id" : "keep-30",
+      "kind" : "mustNotChange",
+      "reference" : "We ordered more mimosas for the table.",
+      "voice" : "Evan (Enhanced)"
+    }
+  ],
+  "dictionary" : [
+    {
+      "isOrdinaryWord" : false,
+      "note" : "Jeff's company",
+      "term" : "Swagatar",
+      "variants" : [
+        "Sagader"
+      ]
+    },
+    {
+      "isOrdinaryWord" : false,
+      "note" : "the macOS dictation app",
+      "term" : "Talkify",
+      "variants" : [
+        "Talk if I"
+      ]
+    },
+    {
+      "isOrdinaryWord" : true,
+      "note" : "an assistant's name",
+      "term" : "Wren",
+      "variants" : [
+
+      ]
+    },
+    {
+      "isOrdinaryWord" : false,
+      "note" : "the local memory store",
+      "term" : "Mnemosyne",
+      "variants" : [
+        "Mimosine"
+      ]
+    },
+    {
+      "isOrdinaryWord" : false,
+      "note" : "a person, Talkify's maintainer",
+      "term" : "Tornike",
+      "variants" : [
+        "Torniquet"
+      ]
+    },
+    {
+      "isOrdinaryWord" : true,
+      "note" : "a push notification service",
+      "term" : "Pushover",
+      "variants" : [
+        "pushover"
+      ]
+    },
+    {
+      "isOrdinaryWord" : false,
+      "note" : "a VPN mesh network",
+      "term" : "Tailscale",
+      "variants" : [
+        "tail scale"
+      ]
+    },
+    {
+      "isOrdinaryWord" : false,
+      "note" : "a Bible app company",
+      "term" : "YouVersion",
+      "variants" : [
+        "U version"
+      ]
+    },
+    {
+      "isOrdinaryWord" : false,
+      "note" : "a software product",
+      "term" : "ChainBuilder",
+      "variants" : [
+        "Chain Builder"
+      ]
+    },
+    {
+      "isOrdinaryWord" : false,
+      "note" : "an old agent workspace",
+      "term" : "Vorno",
+      "variants" : [
+
+      ]
+    },
+    {
+      "isOrdinaryWord" : false,
+      "note" : "a surname",
+      "term" : "Gomareli",
+      "variants" : [
+
+      ]
+    },
+    {
+      "isOrdinaryWord" : false,
+      "note" : "a task manager app",
+      "term" : "Todoist",
+      "variants" : [
+
+      ]
+    },
+    {
+      "isOrdinaryWord" : true,
+      "note" : "an agent gateway",
+      "term" : "Hermes",
+      "variants" : [
+
+      ]
+    },
+    {
+      "isOrdinaryWord" : true,
+      "note" : "an app update framework",
+      "term" : "Sparkle",
+      "variants" : [
+
+      ]
+    }
+  ]
+}
