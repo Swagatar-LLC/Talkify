@@ -16,8 +16,10 @@ Two things in Talkify are on-device models, and they are not the same thing. A *
 - AppKit is the application shell: lifecycle, menu bar status item, and non-activating panels such as the HUD
 - SwiftUI renders windowed UI such as settings and onboarding, hosted inside the AppKit shell
 - Talkify uses Swift 6 with complete strict concurrency
-- Talkify uses Apple frameworks only, with one exception: Sparkle, for updating itself
-- Sparkle is the single third-party dependency and is confined to `Talkify/Updates/`; nothing else imports it, and speech, insertion, and the HUD stay pure Apple frameworks
+- Talkify uses Apple frameworks plus two packages: Sparkle, for updating itself, and on the Swagatar fork WhisperKit, which runs a Catalog Model the user chose to install (ADR-9001)
+- Sparkle is confined to `Talkify/Updates/`; nothing else imports it
+- WhisperKit is pinned to an exact version and confined to `Talkify/Whisper/`; it is handed only the files the installer has just re-hashed, with its downloader off, and Apple Speech stays the default Recognizer
+- Insertion and the HUD stay pure Apple frameworks
 - Apple's `FoundationModels` is where **Prompt Shaping** runs. It is a system framework holding a system model, so the one-dependency rule and the nothing-leaves-the-Mac promise both hold with a language model in the app: there is no key, no account, and no request
 - `Translation` and `NaturalLanguage` are the other two frameworks that read the user's words rather than carry them: the first for **Dictate and Translate**, the second to name the language of a **Read Aloud** selection
 
@@ -58,6 +60,10 @@ _Avoid_: Bundled model, Talkify model, Whisper model
 **Recognizer**:
 What turns a **Direct Dictation** session's audio into text. Apple Speech is one; a Catalog Model would be another. It is fed by the session's microphone rather than owning one, and takes the **Vocabulary** as hints ordered likeliest last.
 _Avoid_: Engine, backend, transcriber (Apple's own type)
+
+**Catalog Model**:
+An open-weight speech recognizer named in the catalog bundled with the app, pinned file by file, that the user may download and pick as the **Recognizer**. Distinct from a **Speech Model**, which Apple manages.
+_Avoid_: Whisper model, custom model, local model
 
 **Prompt Shaping**:
 An opt-in pass that rewrites finished **Direct Dictation** text through the **On-device model** before insertion, using the session's **Shaping Prompt**.

@@ -232,12 +232,15 @@ These are settled. Reopening one needs a new argument, not a preference:
 - Swift 6, strict concurrency complete
 - AppKit is the shell: lifecycle, status item, non-activating panels. SwiftUI
   renders windowed UI inside it
-- Apple Speech only, `SpeechAnalyzer` and `SpeechTranscriber`. No Whisper, no
-  local inference models
+- Apple Speech by default, `SpeechAnalyzer` and `SpeechTranscriber`. On the
+  Swagatar fork a user may install one Catalog Model, Whisper through WhisperKit,
+  as an opt-in Recognizer (`docs/adr/9001-catalog-models.md`)
 - Model-View with local pure reducers. No MVVM, no TCA, no global store
   (`docs/adr/0005-mv-with-local-reducers.md`)
-- Exactly one third-party dependency, Sparkle, confined to `Talkify/Updates/`.
-  Adding a second is a decision to raise, not one to make in a pull request
+- Two third-party dependencies, each confined to one folder: Sparkle in
+  `Talkify/Updates/`, and on the fork WhisperKit, pinned to an exact version, in
+  `Talkify/Whisper/`. Adding another is a decision to raise, not one to make in a
+  pull request
 
 Architectural decisions live in [`docs/adr/`](docs/adr/). If your change
 contradicts one, say so in the issue and say why it is worth reopening. If your
