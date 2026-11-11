@@ -43,8 +43,10 @@ network entitlement first.
 The Vocabulary does not change shape for this. The recognizer reader of ADR-0009 becomes
 a hint layer with one adapter per recognizer:
 - DictationTranscriber gets contextual strings.
-- Whisper gets a short prompt, about 15 terms, with the likeliest terms last. A
-  49-term prompt with its targets first dropped Whisper from 32 to 11 of 36.
+- Whisper gets a short prompt, at most 15 terms and 93 tokens, with the likeliest terms
+  last. A 49-term prompt with its targets first dropped Whisper from 32 to 11 of 36.
+  The token budget leaves a full 30 s window room for its words in Whisper's
+  224-token decoder, measured with the model's own tokenizer.
 - Parakeet, if it is ever listed, gets a boosting list with rescue off.
 
 A pure planner chooses the terms. The readers after recognition, and the exclusions,

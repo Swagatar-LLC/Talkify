@@ -501,7 +501,7 @@ actor SpeechRecognitionService {
 /// strings, so they bias the analyzer when it is built, never on the keypress.
 extension SpeechRecognitionService: Recognizer {
   func setHints(_ hints: [String]) async {
-    await setVocabulary(hints)
+    await setVocabulary(HintPlanner.contextualStrings(for: hints))
   }
 
   /// A buffer with no session to hear it is dropped quietly, the way a

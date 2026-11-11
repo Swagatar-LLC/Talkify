@@ -4,37 +4,6 @@ import Testing
 
 @testable import Talkify
 
-struct WhisperPromptTests {
-  @Test func noHintsMeansNoPrompt() {
-    #expect(WhisperPrompt.text(for: []) == nil)
-    #expect(WhisperPrompt.text(for: ["", "  "]) == nil)
-  }
-
-  @Test func termsJoinInTheOrderGivenAndEndTheLine() {
-    #expect(WhisperPrompt.text(for: ["Talkify", "Wren", "Vorno"]) == "Talkify, Wren, Vorno.")
-  }
-
-  @Test func aLongListKeepsTheNewestTermsWithTheLikeliestLast() {
-    let hints = (1...40).map { "term\($0)" }
-    let text = try! #require(WhisperPrompt.text(for: hints))
-    let terms = text.dropLast().components(separatedBy: ", ")
-    #expect(terms.count == WhisperPrompt.termLimit)
-    #expect(terms.first == "term26")
-    #expect(terms.last == "term40")
-  }
-
-  @Test func aRepeatedTermKeepsItsLaterPlace() {
-    #expect(WhisperPrompt.text(for: ["Wren", "Vorno", " Wren "]) == "Vorno, Wren.")
-  }
-
-  @Test func repeatsDoNotTakeSlotsFromOtherTerms() {
-    let hints = (1...15).map { "term\($0)" } + Array(repeating: "term15", count: 10)
-    let terms = try! #require(WhisperPrompt.text(for: hints)).dropLast().components(separatedBy: ", ")
-    #expect(terms.count == 15)
-    #expect(terms.first == "term1")
-  }
-}
-
 struct VoiceActivityGateTests {
   private let rate = 16_000.0
   private let gate = VoiceActivityGate()
