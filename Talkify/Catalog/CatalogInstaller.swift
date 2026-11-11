@@ -164,9 +164,13 @@ struct CatalogInstaller: Sendable {
     defer { try? handle.close() }
     var hasher = SHA256()
     // Read in chunks rather than mapping: a file truncated under a mapping crashes the app.
-    while let chunk = try handle.read(upToCount: 8 << 20), !chunk.isEmpty {
+    // Each chunk is released before the next is read; without the pool every chunk of a
+    // 648 MB model stayed alive until the caller returned, lifting the process by 1.2 GB.
+    while try autoreleasepool(invoking: {
+      guard let chunk = try handle.read(upToCount: 8 << 20), !chunk.isEmpty else { return false }
       hasher.update(data: chunk)
-    }
+      return true
+    }) {}
     return hex(hasher.finalize())
   }
 
