@@ -26,6 +26,7 @@ struct AppSettingsTests {
     #expect(settings.readAloudVoiceID.isEmpty)
     #expect(settings.dictationTriggerBinding == .fnTrigger)
     #expect(settings.readAloudBinding == .optionEscape)
+    #expect(settings.recognizerModelID.isEmpty)
   }
 
   @Test func everyPreferenceRoundTrips() {
