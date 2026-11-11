@@ -4,5 +4,6 @@ enum SpeechRecognitionService {
   struct Update: Sendable {
     let finalizedText: String
     let volatileText: String
+    var heardSpeech = false
   }
 }
