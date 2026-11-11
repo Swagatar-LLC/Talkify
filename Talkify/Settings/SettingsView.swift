@@ -7,6 +7,7 @@ struct SettingsView: View {
   @Bindable var settings: AppSettings
   let sounds: HUDSounds
   let runtimeState: SettingsRuntimeState
+  let recognizers: RecognizerStore
   let usageTracker: UsageTracker
   let updater: SparkleUpdaterService
   let launchAtLogin: LaunchAtLoginService
@@ -15,7 +16,29 @@ struct SettingsView: View {
   @Environment(\.colorSchemeContrast) private var contrast
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-  @State private var selectedSection: SettingsSection = .appearance
+  @State private var selectedSection: SettingsSection
+
+  init(
+    settings: AppSettings,
+    sounds: HUDSounds,
+    runtimeState: SettingsRuntimeState,
+    recognizers: RecognizerStore,
+    usageTracker: UsageTracker,
+    updater: SparkleUpdaterService,
+    launchAtLogin: LaunchAtLoginService,
+    initialSection: SettingsSection = .appearance,
+    onClose: @escaping () -> Void
+  ) {
+    self.settings = settings
+    self.sounds = sounds
+    self.runtimeState = runtimeState
+    self.recognizers = recognizers
+    self.usageTracker = usageTracker
+    self.updater = updater
+    self.launchAtLogin = launchAtLogin
+    self.onClose = onClose
+    _selectedSection = State(initialValue: initialSection)
+  }
 
   var body: some View {
     VStack(spacing: 0) {
@@ -39,6 +62,7 @@ struct SettingsView: View {
             sounds: sounds,
             usageTracker: usageTracker,
             runtimeState: runtimeState,
+            recognizers: recognizers,
             updater: updater,
             launchAtLogin: launchAtLogin
           )
@@ -230,6 +254,7 @@ private struct SettingsContent: View {
   let sounds: HUDSounds
   let usageTracker: UsageTracker
   let runtimeState: SettingsRuntimeState
+  let recognizers: RecognizerStore
   let updater: SparkleUpdaterService
   let launchAtLogin: LaunchAtLoginService
 
@@ -263,6 +288,8 @@ private struct SettingsContent: View {
           ReadAloudSettingsView(settings: settings)
         case .language:
           LanguageSettingsView(settings: settings, runtimeState: runtimeState)
+        case .recognizer:
+          RecognizerSettingsView(store: recognizers)
         case .vocabulary:
           VocabularySettingsView(settings: settings)
         case .shortcuts:
@@ -287,6 +314,7 @@ private struct SettingsContent: View {
     settings: settings,
     sounds: HUDSounds(),
     runtimeState: SettingsRuntimeState(),
+    recognizers: RecognizerPreviewFixtures.store(),
     usageTracker: UsageTracker(store: UsageStore(
       fileURL: FileManager.default.temporaryDirectory
         .appending(path: "TalkifySettingsPreview-usage.json")
