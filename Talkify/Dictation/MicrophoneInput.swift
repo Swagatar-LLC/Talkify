@@ -1,10 +1,14 @@
 import AVFAudio
 import Accelerate
+import AudioToolbox
+import AVFoundation
 import os
 
 final class MicrophoneInput: @unchecked Sendable {
   enum InputError: LocalizedError, Sendable {
     case unavailable
+    case permissionDenied
+    case routingFailed(OSStatus)
     case converterCreationFailed
     case conversionFailed(String)
     case analyzerBackpressure
@@ -13,6 +17,10 @@ final class MicrophoneInput: @unchecked Sendable {
       switch self {
       case .unavailable:
         "No microphone input is available."
+      case .permissionDenied:
+        "Microphone access is denied. Enable it in System Settings."
+      case let .routingFailed(status):
+        "The selected microphone could not be opened (\(status))."
       case .converterCreationFailed:
         "The microphone audio format is unsupported."
       case let .conversionFailed(message):
@@ -81,6 +89,8 @@ final class MicrophoneInput: @unchecked Sendable {
   /// Serialises route recovery off the notification thread.
   private let recoveryQueue = DispatchQueue(label: "com.tgomareli.Talkify.mic-recovery")
   private var configurationObserver: (any NSObjectProtocol)?
+  private var routeObserver: (any NSObjectProtocol)?
+  private let route: AudioInputRoute?
   private var analyzerFormat: AVAudioFormat?
   private var recovering = false
   /// A route change that arrived while recovering. Dropping it would leave a
@@ -88,7 +98,7 @@ final class MicrophoneInput: @unchecked Sendable {
   /// than one.
   private var recoveryPending = false
   /// Hands a converted buffer to the Recognizer; false when it was dropped.
-  private let feed: @Sendable (AVAudioPCMBuffer) -> Bool
+  private let feed: (@Sendable (AVAudioPCMBuffer) -> Bool)?
   private let failureHandler: @Sendable (InputError) -> Void
   /// Normalized microphone level (0–1) per tap buffer, for the HUD's
   /// voice-reactive visual. Called on the audio thread.
@@ -99,33 +109,49 @@ final class MicrophoneInput: @unchecked Sendable {
   private var reportedFailure = false
 
   init(
-    feed: @escaping @Sendable (AVAudioPCMBuffer) -> Bool,
+    feed: (@Sendable (AVAudioPCMBuffer) -> Bool)? = nil,
     failureHandler: @escaping @Sendable (InputError) -> Void,
-    levelHandler: (@Sendable (Float) -> Void)? = nil
+    levelHandler: (@Sendable (Float) -> Void)? = nil,
+    route: AudioInputRoute? = nil
   ) {
     self.feed = feed
     self.failureHandler = failureHandler
     self.levelHandler = levelHandler
+    self.route = route
   }
 
   func start(outputFormat: AVAudioFormat) throws {
-    let hardwareFormat = audioEngine.inputNode.inputFormat(forBus: 0)
-    guard Self.hasUsableHardwareInput(hardwareFormat) else {
-      throw InputError.unavailable
+    try recoveryQueue.sync {
+      try startOnRecoveryQueue(outputFormat: outputFormat)
     }
+  }
 
-    stateLock.withLock { analyzerFormat = outputFormat }
-    observeConfigurationChanges(of: audioEngine)
+  private func startOnRecoveryQueue(outputFormat: AVAudioFormat) throws {
+    if feed != nil { route?.setDictationActive(true) }
+    stateLock.withLock {
+      analyzerFormat = outputFormat
+      running = true
+    }
+    if let route {
+      routeObserver = NotificationCenter.default.addObserver(
+        forName: AudioInputRoute.didChange, object: route, queue: nil
+      ) { [weak self] _ in self?.recoverFromRouteChange() }
+    }
     do {
       try startCapturing(on: audioEngine, into: outputFormat)
     } catch {
+      stateLock.withLock { running = false }
       stopObservingConfigurationChanges()
+      stopObservingRouteChanges()
+      audioEngine.stop()
+      route?.publish(.failed(error.localizedDescription))
+      if feed != nil { route?.setDictationActive(false) }
       AppLog.audio.error(
         "engine failed to start: \(error.localizedDescription, privacy: .public)"
       )
       throw error
     }
-    stateLock.withLock { running = true }
+    route?.publish(.started)
     AppLog.audio.info(
       "capturing at \(self.audioEngine.inputNode.outputFormat(forBus: 0).sampleRate, privacy: .public) Hz"
     )
@@ -138,7 +164,26 @@ final class MicrophoneInput: @unchecked Sendable {
   /// to create tap due to format mismatch"), which Swift cannot catch, so the
   /// app would die rather than recover. Nil means the bus's live format.
   private func startCapturing(on engine: AVAudioEngine, into outputFormat: AVAudioFormat) throws {
+    let authorization = AVCaptureDevice.authorizationStatus(for: .audio)
+    guard authorization != .denied, authorization != .restricted else {
+      throw InputError.permissionDenied
+    }
+    if let route {
+      guard var deviceID = try route.deviceIDForCapture() else { throw InputError.unavailable }
+      guard let unit = engine.inputNode.audioUnit else { throw InputError.unavailable }
+      let status = AudioUnitSetProperty(
+        unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
+        &deviceID, UInt32(MemoryLayout.size(ofValue: deviceID))
+      )
+      guard status == noErr else { throw InputError.routingFailed(status) }
+    }
     let inputNode = engine.inputNode
+    guard Self.hasUsableHardwareInput(inputNode.inputFormat(forBus: 0)) else {
+      throw InputError.unavailable
+    }
+    // Changing CurrentDevice is our own configuration change, not a failed
+    // running engine. Observe only after that write to avoid recovery loops.
+    observeConfigurationChanges(of: engine)
     inputNode.removeTap(onBus: 0)
 
     let converterBox = ConverterBox(outputFormat: outputFormat)
@@ -161,7 +206,8 @@ final class MicrophoneInput: @unchecked Sendable {
       forName: .AVAudioEngineConfigurationChange,
       object: engine,
       queue: nil
-    ) { [weak self] _ in
+    ) { [weak self, weak engine] _ in
+      guard engine?.isRunning == false else { return }
       AppLog.audio.notice("audio route changed; the engine has stopped itself")
       self?.recoverFromRouteChange()
     }
@@ -174,6 +220,11 @@ final class MicrophoneInput: @unchecked Sendable {
       return configurationObserver
     }
     if let observer { NotificationCenter.default.removeObserver(observer) }
+  }
+
+  private func stopObservingRouteChanges() {
+    if let routeObserver { NotificationCenter.default.removeObserver(routeObserver) }
+    routeObserver = nil
   }
 
   /// AVAudioEngine stops itself when the audio hardware changes underneath it
@@ -231,13 +282,12 @@ final class MicrophoneInput: @unchecked Sendable {
 
     let engine = AVAudioEngine()
     stateLock.withLock { audioEngine = engine }
-    observeConfigurationChanges(of: engine)
     do {
       try startCapturing(on: engine, into: outputFormat)
     } catch {
       // Nothing else is coming. Ending the session with a reason beats
       // leaving the shape up in front of a microphone that is not running.
-      reportFailure(.unavailable)
+      reportFailure((error as? InputError) ?? .unavailable)
     }
   }
 
@@ -246,6 +296,12 @@ final class MicrophoneInput: @unchecked Sendable {
   }
 
   func stop() {
+    // Stop cannot interleave with replacement-engine startup and leave an
+    // unowned microphone running after the session has ended.
+    recoveryQueue.sync { stopOnRecoveryQueue() }
+  }
+
+  private func stopOnRecoveryQueue() {
     let shouldStop = stateLock.withLock { () -> Bool in
       guard running else { return false }
       running = false
@@ -254,16 +310,26 @@ final class MicrophoneInput: @unchecked Sendable {
 
     guard shouldStop else { return }
     stopObservingConfigurationChanges()
+    stopObservingRouteChanges()
     let engine = stateLock.withLock { audioEngine }
     engine.stop()
     engine.inputNode.removeTap(onBus: 0)
+    route?.publish(.stopped)
+    if feed != nil { route?.setDictationActive(false) }
+  }
+
+  deinit {
+    if let configurationObserver { NotificationCenter.default.removeObserver(configurationObserver) }
+    if let routeObserver { NotificationCenter.default.removeObserver(routeObserver) }
+    audioEngine.stop()
+    if feed != nil, running { route?.setDictationActive(false) }
   }
 
   private func receive(_ buffer: AVAudioPCMBuffer, converterBox: ConverterBox) {
     publishLevel(of: buffer)
     // Nothing reaches recognition after a failure: the session is ending, and
     // audio from a microphone that already failed is not worth transcribing.
-    guard !stateLock.withLock({ reportedFailure }) else { return }
+    guard let feed, !stateLock.withLock({ reportedFailure }) else { return }
     do {
       let convertedBuffer = try convert(buffer, using: converterBox)
       if !feed(convertedBuffer) {
@@ -315,7 +381,7 @@ final class MicrophoneInput: @unchecked Sendable {
   /// mapped to 0–1 over a 50 dB window: a quiet room sits near zero and
   /// speech fills most of the range.
   private func publishLevel(of buffer: AVAudioPCMBuffer) {
-    guard let levelHandler,
+    guard levelHandler != nil || route != nil,
        let samples = buffer.floatChannelData?[0],
        buffer.frameLength > 0
     else { return }
@@ -324,7 +390,9 @@ final class MicrophoneInput: @unchecked Sendable {
       UnsafeBufferPointer(start: samples, count: Int(buffer.frameLength))
     )
     let db = 20 * log10(max(rms, .leastNormalMagnitude))
-    levelHandler(min(1, max(0, (db + 50) / 50)))
+    let level = min(1, max(0, (db + 50) / 50))
+    levelHandler?(level)
+    route?.publish(.level(level))
   }
 
   private func reportFailure(_ error: InputError) {
@@ -335,6 +403,7 @@ final class MicrophoneInput: @unchecked Sendable {
     }
 
     guard shouldReport else { return }
+    route?.publish(.failed(error.localizedDescription))
     AppLog.audio.error(
       "microphone failed: \(error.errorDescription ?? "unknown", privacy: .public)"
     )

@@ -105,13 +105,15 @@ extension DirectDictationController {
       hudController: DictationHUDController,
       usageTracker: UsageTracker,
       textInsertionService: TextInsertionService,
-      recognizerStore: RecognizerStore
+      recognizerStore: RecognizerStore,
+      audioInput: AudioInputController? = nil
     ) -> Self {
       let speechService = SpeechRecognitionService()
       let recognizers = DictationRecognizers(
         appleSpeech: speechService,
         store: recognizerStore,
-        load: DictationRecognizers.loadCatalogModel
+        load: DictationRecognizers.loadCatalogModel,
+        startCapture: RecognizerFeed.microphone(route: audioInput?.route)
       )
       let historyStore = DictationHistoryStore()
 

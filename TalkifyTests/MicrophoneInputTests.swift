@@ -1,8 +1,23 @@
 import AVFAudio
+import Speech
 import Testing
 @testable import Talkify
 
 struct MicrophoneInputTests {
+  @Test func absentEffectiveInputRefusesCaptureWithoutOpeningSystemMicrophone() throws {
+    let (_, continuation) = AsyncStream.makeStream(of: AnalyzerInput.self)
+    defer { continuation.finish() }
+    let input = MicrophoneInput(
+      analyzerContinuation: continuation,
+      failureHandler: { _ in },
+      route: AudioInputRoute()
+    )
+    let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1))
+    #expect(throws: MicrophoneInput.InputError.self) { try input.start(outputFormat: format) }
+    input.stop()
+    input.stop()
+  }
+
   @Test func rejectsMissingHardwareInput() throws {
     let format = try #require(AVAudioFormat(
       commonFormat: .pcmFormatFloat32,

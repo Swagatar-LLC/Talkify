@@ -67,7 +67,8 @@ final class DirectDictationController {
     hudController: DictationHUDController,
     usageTracker: UsageTracker,
     textInsertionService: TextInsertionService,
-    recognizerStore: RecognizerStore
+    recognizerStore: RecognizerStore,
+    audioInput: AudioInputController? = nil
   ) {
     self.init(
       settings: settings,
@@ -75,7 +76,8 @@ final class DirectDictationController {
         hudController: hudController,
         usageTracker: usageTracker,
         textInsertionService: textInsertionService,
-        recognizerStore: recognizerStore
+        recognizerStore: recognizerStore,
+        audioInput: audioInput
       )
     )
   }
