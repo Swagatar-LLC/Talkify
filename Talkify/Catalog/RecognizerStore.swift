@@ -209,39 +209,33 @@ final class RecognizerStore {
     notice = RecognizerNotice(modelID: model.id, modelName: model.displayName, fallback: fallback)
   }
 
-  /// The session's question: with the chosen model, can it start in `locale`? Returns
-  /// what `load` built from the verified folder, or nil for Apple Speech, after posting
-  /// the notice that says why. Apple Speech chosen, or a system too old to list any
-  /// model, returns nil quietly: nothing the user chose was refused.
-  func recognizer<Loaded>(
-    for locale: Locale,
+  /// Verifies and loads the chosen model, for a session to use later. Nil when Apple
+  /// Speech is chosen, or the system is too old to list the model: nothing the user chose
+  /// was refused. Posts nothing, since no session has fallen back yet; the session that
+  /// does reports what this returned (`CatalogPreparation.fallback(forLanguage:)`).
+  ///
+  /// Never downloads. Missing or changed files come back as a failure, cured only by the
+  /// user's Download.
+  func prepareChosenModel<Loaded>(
     load: (CatalogModel, URL) async throws -> Loaded
-  ) async -> Loaded? {
+  ) async -> CatalogPreparation<Loaded>? {
     guard let id = selectedModelID else { return nil }
     guard let model = catalog.models.first(where: { $0.id == id }), runsOnThisSystem(model) else {
       return nil
     }
     if isBlocked(model) {
-      report(.revoked(model.revoked?.reason ?? "no reason given"), for: model)
-      return nil
-    }
-    let language = Self.catalogLanguage(of: locale)
-    guard model.languages.contains(language) else {
-      report(.unsupportedLanguage(language), for: model)
-      return nil
+      return .failed(model, .revoked(model.revoked?.reason ?? "no reason given"))
     }
     let folder: URL
     do {
       folder = try await client.verify(model)
     } catch {
-      report(RecognizerFallback(error: error), for: model)
-      return nil
+      return .failed(model, RecognizerFallback(error: error))
     }
     do {
-      return try await load(model, folder)
+      return .ready(model, try await load(model, folder))
     } catch {
-      report(RecognizerFallback(error: error), for: model)
-      return nil
+      return .failed(model, RecognizerFallback(error: error))
     }
   }
 

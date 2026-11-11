@@ -39,6 +39,31 @@ struct VoiceActivityGateTests {
     let burst = tone(dBFS: -25, seconds: 0.06)
     #expect(gate.containsSpeech(Array([burst, gap, burst, gap, burst].joined()), sampleRate: rate))
   }
+
+  /// The detector a session feeds buffer by buffer reaches the same verdict as the
+  /// gate over the whole session, at whatever buffer size, frames straddling buffers.
+  @Test(arguments: [1, 160, 479, 1_600, 4_096])
+  func theStreamingDetectorAgreesWithTheWholeSessionGate(bufferSize: Int) {
+    let quiet = [Float](repeating: 0, count: Int(0.5 * rate))
+    let sessions: [[Float]] = [
+      quiet,
+      tone(dBFS: -41, seconds: 1),
+      quiet + tone(dBFS: -25, seconds: 0.5),
+      quiet + tone(dBFS: -10, seconds: 0.06) + quiet,
+      Array([tone(dBFS: -25, seconds: 0.06), quiet, tone(dBFS: -25, seconds: 0.06), quiet,
+             tone(dBFS: -25, seconds: 0.06)].joined()),
+    ]
+    for session in sessions {
+      var detector = VoiceActivityGate.Detector(gate: gate, sampleRate: rate)
+      var heard = false
+      for start in stride(from: 0, to: session.count, by: bufferSize) {
+        let chunk = Array(session[start..<min(start + bufferSize, session.count)])
+        heard = chunk.withUnsafeBufferPointer { detector.hear($0) }
+      }
+      #expect(heard == gate.containsSpeech(session, sampleRate: rate))
+      #expect(detector.hasHeardSpeech == heard)
+    }
+  }
 }
 
 struct WhisperRecognizerLoadTests {

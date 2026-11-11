@@ -21,24 +21,43 @@ struct VoiceActivityGate: Equatable, Sendable {
   var minimumSpeechDuration: Double = 0.15
 
   func containsSpeech(_ samples: [Float], sampleRate: Double) -> Bool {
-    let frameLength = max(1, Int((frameDuration * sampleRate).rounded()))
-    let framesNeeded = max(1, Int((minimumSpeechDuration / frameDuration).rounded(.up)))
-    let threshold = pow(10, thresholdDBFS / 20)
-    let meanSquareThreshold = threshold * threshold
+    var detector = Detector(gate: self, sampleRate: sampleRate)
+    return samples.withUnsafeBufferPointer { detector.hear($0) }
+  }
 
-    var loudFrames = 0
-    var start = 0
-    while start + frameLength <= samples.count {
-      var sum: Float = 0
-      for index in start..<(start + frameLength) {
-        sum += samples[index] * samples[index]
-      }
-      if sum / Float(frameLength) >= meanSquareThreshold {
-        loudFrames += 1
-        if loudFrames >= framesNeeded { return true }
-      }
-      start += frameLength
+  /// The same rule, applied to audio as it arrives: buffer after buffer, with a frame
+  /// allowed to straddle two of them. Whisper posts no draft text, so this is how a
+  /// session says it has heard someone before it finishes.
+  struct Detector: Sendable {
+    private let frameLength: Int
+    private let framesNeeded: Int
+    private let meanSquareThreshold: Float
+    private var loudFrames = 0
+    private var frameSum: Float = 0
+    private var frameFill = 0
+
+    init(gate: VoiceActivityGate, sampleRate: Double) {
+      frameLength = max(1, Int((gate.frameDuration * sampleRate).rounded()))
+      framesNeeded = max(1, Int((gate.minimumSpeechDuration / gate.frameDuration).rounded(.up)))
+      let threshold = pow(10, gate.thresholdDBFS / 20)
+      meanSquareThreshold = threshold * threshold
     }
-    return false
+
+    /// Whether the audio heard so far counts as speech.
+    var hasHeardSpeech: Bool { loudFrames >= framesNeeded }
+
+    /// Hears `samples` after everything before them; true once the audio so far is speech.
+    mutating func hear(_ samples: UnsafeBufferPointer<Float>) -> Bool {
+      for sample in samples {
+        guard !hasHeardSpeech else { break }
+        frameSum += sample * sample
+        frameFill += 1
+        guard frameFill == frameLength else { continue }
+        if frameSum / Float(frameLength) >= meanSquareThreshold { loudFrames += 1 }
+        frameSum = 0
+        frameFill = 0
+      }
+      return hasHeardSpeech
+    }
   }
 }

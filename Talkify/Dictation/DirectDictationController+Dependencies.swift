@@ -8,7 +8,8 @@ import AppKit
 extension DirectDictationController {
   struct Dependencies {
     // Speech recognition. Languages and warming are Apple Speech's own; the
-    // session itself runs through a Recognizer, fed by the microphone.
+    // session itself runs through a Recognizer, fed by the microphone: the
+    // chosen Catalog Model once it is warm, Apple Speech otherwise.
     let setDownloadHandler: @Sendable (
       @escaping @Sendable (SpeechRecognitionService.ModelDownload) -> Void
     ) async -> Void
@@ -19,6 +20,10 @@ extension DirectDictationController {
     /// warms.
     let setVocabulary: @Sendable ([String]) async -> Void
     let prewarm: @Sendable (Locale) async throws -> Void
+    /// Loads and warms the chosen Catalog Model, or releases it when Apple
+    /// Speech is chosen. Never throws: a failure is the next session's
+    /// fallback, and Apple Speech is already warm.
+    let prepareRecognizer: @Sendable () async -> Void
     let startRecognition: @Sendable (
       Locale,
       _ updateHandler: @escaping @Sendable (SpeechRecognitionService.Update) -> Void,
@@ -99,10 +104,15 @@ extension DirectDictationController {
     static func live(
       hudController: DictationHUDController,
       usageTracker: UsageTracker,
-      textInsertionService: TextInsertionService
+      textInsertionService: TextInsertionService,
+      recognizerStore: RecognizerStore
     ) -> Self {
       let speechService = SpeechRecognitionService()
-      let recognition = RecognizerFeed(recognizer: speechService)
+      let recognizers = DictationRecognizers(
+        appleSpeech: speechService,
+        store: recognizerStore,
+        load: DictationRecognizers.loadCatalogModel
+      )
       let historyStore = DictationHistoryStore()
 
       return Self(
@@ -112,20 +122,21 @@ extension DirectDictationController {
         retainOnly: { await speechService.retainOnly(locales: $0) },
         // In the order they were added, the newest last: until something ranks
         // them, recency is the best guess at what is likeliest.
-        setVocabulary: { await recognition.recognizer.setHints($0) },
+        setVocabulary: { await recognizers.setHints($0) },
         prewarm: { try await speechService.prewarm(locale: $0) },
+        prepareRecognizer: { await recognizers.prepare() },
         startRecognition: { locale, updateHandler, failureHandler, levelHandler in
-          try await recognition.start(
+          try await recognizers.start(
             locale: locale,
             updateHandler: updateHandler,
             failureHandler: failureHandler,
             levelHandler: levelHandler
           )
         },
-        finishRecognition: { try await recognition.finish() },
-        cancelRecognition: { await recognition.cancel() },
+        finishRecognition: { try await recognizers.finish() },
+        cancelRecognition: { await recognizers.cancel() },
         shutDownRecognition: {
-          await recognition.cancel()
+          await recognizers.cancel()
           await speechService.shutDown()
         },
         translation: TranslationCoordinator(

@@ -13,7 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private var settingsWindowController: SettingsWindowController?
   private var usageTracker: UsageTracker?
   /// The chosen Recognizer and every Catalog Model's install state, shared by Settings
-  /// and, once sessions use it, Direct Dictation.
+  /// and Direct Dictation.
   private var recognizerStore: RecognizerStore?
   private let settingsRuntimeState = SettingsRuntimeState()
   private let updaterService = SparkleUpdaterService()
@@ -52,7 +52,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     let settings = AppSettings()
     self.settings = settings
-    recognizerStore = RecognizerStore.live(settings: settings)
+    let recognizerStore = RecognizerStore.live(settings: settings)
+    self.recognizerStore = recognizerStore
     // One shape, two features. The stage owns the window and hands it out;
     // each feature's HUD controller only decides what its surface says.
     let stage = HUDStage(settings: settings)
@@ -67,7 +68,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       settings: settings,
       hudController: hudController,
       usageTracker: usageTracker,
-      textInsertionService: textInsertionService
+      textInsertionService: textInsertionService,
+      recognizerStore: recognizerStore
     )
     self.hudController = hudController
     self.dictationController = dictationController
@@ -153,6 +155,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     applyKeyBindings()
     observeKeyBindings()
     observeLanguages()
+    observeRecognizer()
 
     // A background check is postponed while a session is running, so an update
     // window can never take focus mid-dictation and move the insertion target.
@@ -209,6 +212,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       Task { @MainActor [weak self] in
         self?.dictationController?.applyLanguages()
         self?.observeLanguages()
+      }
+    }
+  }
+
+  /// Choosing a Recognizer in Settings loads and warms it now, so the next keypress
+  /// after it is ready meets a warm model; choosing Apple Speech releases it.
+  private func observeRecognizer() {
+    guard let settings else { return }
+    withObservationTracking {
+      _ = settings.recognizerModelID
+    } onChange: { [weak self] in
+      Task { @MainActor [weak self] in
+        self?.dictationController?.applyRecognizer()
+        self?.observeRecognizer()
       }
     }
   }

@@ -12,8 +12,10 @@ import os
 /// `tokenizer.json`, so its fall-back download from the Hugging Face Hub is never reached.
 ///
 /// Whisper hears a whole session at once rather than streaming, so a session posts no
-/// draft text: the words arrive when `finish` returns. Audio that never reaches the
-/// voice-activity gate returns no text without running the model.
+/// draft text: the words arrive when `finish` returns. It posts one update with no words
+/// once the voice-activity gate hears speech, so the session's no-speech timeout does not
+/// end a long one. Audio that never reaches the gate returns no text without running the
+/// model.
 actor WhisperRecognizer: Recognizer {
   enum Failure: LocalizedError, Equatable, Sendable {
     /// The catalog entry is not one this runtime can load.
@@ -62,8 +64,14 @@ actor WhisperRecognizer: Recognizer {
   private(set) var prompt: String?
   private(set) var promptTokens: [Int]?
   private var activeLanguage = "en"
-  /// The session's audio so far, or nil outside a session. Written on the audio thread.
-  private let samples = OSAllocatedUnfairLock<[Float]?>(initialState: nil)
+  /// One session's audio so far, and what the gate has made of it.
+  private struct Session {
+    var samples: [Float] = []
+    var detector: VoiceActivityGate.Detector
+    let updateHandler: @Sendable (SpeechRecognitionService.Update) -> Void
+  }
+  /// The session in flight, or nil outside one. Written on the audio thread.
+  private let session = OSAllocatedUnfairLock<Session?>(initialState: nil)
 
   private init(model: CatalogModel, gate: VoiceActivityGate, kit: WhisperKit, tokenizer: any WhisperTokenizer) {
     self.model = model
@@ -138,48 +146,56 @@ actor WhisperRecognizer: Recognizer {
     updateHandler: @escaping @Sendable (SpeechRecognitionService.Update) -> Void,
     beginFeeding: @Sendable (AVAudioFormat) throws -> Void
   ) async throws {
-    guard samples.withLock({ $0 }) == nil else { throw Failure.sessionAlreadyActive }
+    guard session.withLock({ $0 == nil }) else { throw Failure.sessionAlreadyActive }
     let language = Self.language(of: locale)
     guard model.languages.contains(language) else {
       throw Failure.unsupportedLanguage(locale.identifier)
     }
     activeLanguage = language
-    samples.withLock { $0 = [] }
+    let detector = VoiceActivityGate.Detector(gate: gate, sampleRate: Self.sampleRate)
+    session.withLock { $0 = Session(detector: detector, updateHandler: updateHandler) }
     do {
       try beginFeeding(Self.format)
     } catch {
-      samples.withLock { $0 = nil }
+      session.withLock { $0 = nil }
       throw error
     }
   }
 
   /// Copies the buffer into the session. False once the session is over its length cap.
+  /// The buffer that first makes the session speech posts the update that says so.
   nonisolated func feed(_ buffer: AVAudioPCMBuffer) -> Bool {
     guard let channel = buffer.floatChannelData?[0], buffer.format.sampleRate == Self.sampleRate else {
       return false
     }
     let frames = UnsafeBufferPointer(start: channel, count: Int(buffer.frameLength))
     let cap = Int(Self.maximumSessionDuration * Self.sampleRate)
-    return samples.withLockUnchecked { samples in
+    var heard: (@Sendable (SpeechRecognitionService.Update) -> Void)?
+    let kept = session.withLockUnchecked { session in
       // A buffer with no session to hear it is dropped quietly, as Apple's path does.
-      guard samples != nil else { return true }
-      guard samples!.count + frames.count <= cap else { return false }
-      samples!.append(contentsOf: frames)
+      guard session != nil else { return true }
+      guard session!.samples.count + frames.count <= cap else { return false }
+      session!.samples.append(contentsOf: frames)
+      if !session!.detector.hasHeardSpeech, session!.detector.hear(frames) {
+        heard = session!.updateHandler
+      }
       return true
     }
+    heard?(.init(finalizedText: "", volatileText: "", heardSpeech: true))
+    return kept
   }
 
   func finish() async throws -> String {
-    guard let audio = samples.withLock({ samples in
-      defer { samples = nil }
-      return samples
+    guard let ended = session.withLock({ session in
+      defer { session = nil }
+      return session
     }) else {
       throw Failure.noActiveSession
     }
-    guard gate.containsSpeech(audio, sampleRate: Self.sampleRate) else { return "" }
+    guard ended.detector.hasHeardSpeech else { return "" }
 
     let results = try await kit.transcribe(
-      audioArray: audio + Self.trailingPad,
+      audioArray: ended.samples + Self.trailingPad,
       decodeOptions: decodingOptions(language: activeLanguage)
     )
     return results
@@ -196,7 +212,7 @@ actor WhisperRecognizer: Recognizer {
   private static let trailingPad = [Float](repeating: 0, count: Int(sampleRate))
 
   func cancel() async {
-    samples.withLock { $0 = nil }
+    session.withLock { $0 = nil }
   }
 
   private func decodingOptions(language: String) -> DecodingOptions {
