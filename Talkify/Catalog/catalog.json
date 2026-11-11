@@ -5,7 +5,7 @@
     {
       "id": "whisper-large-v3-turbo-coreml",
       "displayName": "Whisper large-v3-turbo",
-      "status": "proposed",
+      "status": "available",
       "publisher": {
         "weights": "OpenAI (openai/whisper-large-v3-turbo)",
         "conversion": "Argmax (WhisperKit Core ML conversion)"
@@ -194,14 +194,21 @@
           },
           "wer": 0.085
         },
-        "latencyMillisecondsMedian": 618,
-        "latencyMillisecondsP90": 634,
-        "coldLoadSeconds": 157.483,
-        "warmLoadSeconds": 1.475,
-        "peakRSSMiBCold": 645,
-        "peakRSSMiBWarm": 261,
-        "machine": "M4 Max, 48 GB, macOS 26.6.2 (25G83)",
-        "notes": "WhisperKit 1.1.1 with a 9-term prompt, 48 synthetic WAVs. Controls are 18/18 unit-normalised and 15/18 strict, the same as Apple's no-hint arm."
+        "latencyMillisecondsMedian": 821,
+        "latencyMillisecondsP90": 837,
+        "coldLoadSeconds": 220.65,
+        "warmLoadSeconds": 1.72,
+        "peakRSSMiBCold": 742,
+        "peakRSSMiBWarm": 273,
+        "machine": "M4 Max, 48 GB, macOS 27.2.1 (26B131)",
+        "notes": "Re-measured by the verify card with the network denied. Terms, controls and WER: WhisperKit 1.1.1 with the 9 corpus terms as the prompt, 48 synthetic WAVs; the 49-term Vocabulary through the planner scores the same. Controls are 18/18 unit-normalised and 15/18 strict; the 3 are '3mm' formatting that Whisper writes with no prompt too. Latency is key release to insertion through the session path with the 49-term Vocabulary; Whisper's own finish is p50 656 / p90 675 ms. Cold load includes the Neural Engine compile; memory is the process peak."
+      },
+      "review": {
+        "record": "docs/models/reviews/whisper-large-v3-turbo-coreml.md",
+        "networkDenyTest": "pass: corpus harness under deny-network.sb, and launch, Settings and 96 dictation sessions in a sandboxed test host, with no network attempt",
+        "reviewer": "t_c8121969",
+        "secondReviewer": "t_47119487",
+        "date": "2026-11-11"
       },
       "revoked": null
     }
