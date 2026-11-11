@@ -58,7 +58,9 @@ actor WhisperRecognizer: Recognizer {
   let gate: VoiceActivityGate
   private let kit: WhisperKit
   private let tokenizer: any WhisperTokenizer
-  private var promptTokens: [Int]?
+  /// The prompt line the planner chose for the current hints, and its tokens.
+  private(set) var prompt: String?
+  private(set) var promptTokens: [Int]?
   private var activeLanguage = "en"
   /// The session's audio so far, or nil outside a session. Written on the audio thread.
   private let samples = OSAllocatedUnfairLock<[Float]?>(initialState: nil)
@@ -120,13 +122,15 @@ actor WhisperRecognizer: Recognizer {
   }
 
   func setHints(_ hints: [String]) async {
-    guard let text = WhisperPrompt.text(for: hints) else {
-      promptTokens = nil
-      return
-    }
-    // Encoded as WhisperKit's own command line does: a leading space, and no special tokens.
+    prompt = HintPlanner.whisperPrompt(for: hints) { encodePrompt($0).count }
+    promptTokens = prompt.map(encodePrompt)
+  }
+
+  /// `text` encoded as WhisperKit's own command line does: a leading space, and no
+  /// special tokens. The planner's token budget is counted with this same encoding.
+  private func encodePrompt(_ text: String) -> [Int] {
     let specialTokenBegin = tokenizer.specialTokens.specialTokenBegin
-    promptTokens = tokenizer.encode(text: " " + text).filter { $0 < specialTokenBegin }
+    return tokenizer.encode(text: " " + text).filter { $0 < specialTokenBegin }
   }
 
   func start(
