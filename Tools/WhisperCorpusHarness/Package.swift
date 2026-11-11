@@ -18,7 +18,12 @@ let package = Package(
     .executableTarget(
       name: "WhisperCorpusHarness",
       dependencies: [.product(name: "WhisperKit", package: "argmax-oss-swift")],
-      exclude: ["Talkify/Catalog/catalog.json"]
+      // The store belongs to Settings and reads AppSettings, which this tool does not build.
+      exclude: [
+        "Talkify/Catalog/catalog.json",
+        "Talkify/Catalog/RecognizerStore.swift",
+        "Talkify/Catalog/RecognizerStore+Live.swift",
+      ]
     ),
   ]
 )

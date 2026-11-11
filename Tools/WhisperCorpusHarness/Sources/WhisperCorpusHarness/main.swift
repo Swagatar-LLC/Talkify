@@ -9,7 +9,8 @@ import os
 // failed, 2 the run could not complete.
 //
 // usage: WhisperCorpusHarness <whisperkit fixtures> <corpus folder> <out folder>
-//          [--nospeech <folder>] [--short <folder>] [--hints <file>] [--expect-network-denied]
+//          [--nospeech <folder>] [--short <folder>] [--hints <file>] [--min-terms <n>]
+//          [--expect-network-denied]
 //
 // The hints are the corpus terms in the order they first occur, unless --hints names a file
 // of terms, one per line, likeliest last.
@@ -36,7 +37,7 @@ func fail(_ message: String) -> Never {
 }
 
 let arguments = CommandLine.arguments
-guard arguments.count >= 4 else { fail("usage: WhisperCorpusHarness <fixtures> <corpus> <out> [--nospeech dir] [--short dir] [--hints file] [--expect-network-denied]") }
+guard arguments.count >= 4 else { fail("usage: WhisperCorpusHarness <fixtures> <corpus> <out> [--nospeech dir] [--short dir] [--hints file] [--min-terms n] [--expect-network-denied]") }
 let fixtures = URL(filePath: arguments[1], directoryHint: .isDirectory)
 let corpusFolder = URL(filePath: arguments[2], directoryHint: .isDirectory)
 let out = URL(filePath: arguments[3], directoryHint: .isDirectory)
@@ -143,6 +144,11 @@ func run() async throws -> Bool {
     for sentence in corpus { for term in sentence.targets where !hints.contains(term) { hints.append(term) } }
   }
   await recognizer.setHints(hints)
+  let plannedPrompt = await recognizer.prompt ?? ""
+  let plannedTokens = await recognizer.promptTokens?.count ?? 0
+  report["prompt"] = plannedPrompt
+  report["promptTokens"] = plannedTokens
+  lines.append("planned prompt (\(plannedTokens) tokens, budget \(HintPlanner.whisperTokenBudget)): \(plannedPrompt)")
 
   let corpusWavs = try wavs(in: corpusFolder.appending(path: "wav", directoryHint: .isDirectory))
   guard corpusWavs.count == 48 else { throw HarnessError(description: "expected 48 corpus clips, found \(corpusWavs.count)") }
@@ -214,6 +220,22 @@ func run() async throws -> Bool {
   if captureBegan.withLock({ $0 }) { unsupported += " (capture began)" }
   lines.append("de_DE session: \(unsupported)")
 
+  // The budget against the real tokenizer: Vocabularies whose terms tokenize badly, each as
+  // long as the Vocabulary allows. Every planned prompt must stay within the budget.
+  var budgetProbe: [String: Int] = [:]
+  let probes: [String: [String]] = [
+    "64 x Latin letter": (0..<100).map { String(repeating: "x", count: 63) + "\($0 % 10)" },
+    "64 x CJK": (0..<100).map { String(repeating: "語", count: 63) + "\($0 % 10)" },
+    "64 x emoji": (0..<100).map { String(repeating: "🪶", count: 63) + "\($0 % 10)" },
+  ]
+  for (name, probe) in probes {
+    await recognizer.setHints(probe)
+    budgetProbe[name] = await recognizer.promptTokens?.count ?? 0
+  }
+  let budgetHeld = budgetProbe.values.allSatisfy { $0 <= HintPlanner.whisperTokenBudget }
+  lines.append("budget probe, tokens: " + budgetProbe.sorted { $0.key < $1.key }.map { "\($0.key) \($0.value)" }.joined(separator: "; "))
+  report["budgetProbeTokens"] = budgetProbe
+
   let end = Memory.sample()
   let score = CorpusScore(corpus: corpus).score(clips.map { ($0.file, $0.text) })
   let latencies = clips.map(\.analysisMs).sorted()
@@ -223,12 +245,17 @@ func run() async throws -> Bool {
   let jsonl = try clips.map { String(decoding: try JSONEncoder.sorted.encode($0), as: UTF8.self) }.joined(separator: "\n")
   try (jsonl + "\n").write(to: out.appending(path: "whisper_turbo_recognizer.jsonl"), atomically: true, encoding: .utf8)
 
+  // Slice 4 pinned the 9-term run at 32 ± 2; --min-terms sets a floor instead.
+  let termsGate = option("--min-terms").flatMap(Int.init).map {
+    ("terms >= \($0)/36", score.targetHits >= $0)
+  } ?? ("terms 32/36 ± 2", abs(score.targetHits - 32) <= 2)
   let gate: [String: Bool] = [
-    "terms 32/36 ± 2": abs(score.targetHits - 32) <= 2,
+    termsGate.0: termsGate.1,
     "controls 18/18 unchanged (unit-normalised)": score.protectedUnitNorm == score.protectedTotal,
     "empty output on silence": silenceEmpty,
     "p90 finish latency <= 1.0 s": p90 <= 1000,
     "warm RSS <= 400 MiB": warmPeak.residentMiB <= 400,
+    "prompt within the token budget": budgetHeld && plannedTokens <= HintPlanner.whisperTokenBudget,
   ]
   report.merge([
     "model": model.id, "files": clips.count, "hints": hints,
