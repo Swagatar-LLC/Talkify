@@ -120,6 +120,42 @@ struct CatalogTests {
     #expect(rules(model) == [.duplicatePath])
   }
 
+  /// The id names the model's folder under the install root, and Delete removes that folder
+  /// whole, so an id that is not a plain slug could point either one somewhere else.
+  @Test(arguments: ["..", ".", "../Talkify", "a/b", "Whisper-Turbo", "whisper turbo", "-whisper", "whisper.", "a..b"])
+  func anIDThatIsNotASlugFails(id: String) throws {
+    var model = try whisper()
+    model.id = id
+    #expect(rules(model) == [.modelID])
+  }
+
+  @Test(arguments: ["parakeet-tdt-0.6b-v3-coreml", "whisper-large-v3-turbo-coreml", "a"])
+  func aSlugIDPasses(id: String) throws {
+    var model = try whisper()
+    model.id = id
+    #expect(rules(model) == [])
+  }
+
+  /// The Mac's volume ignores case, so these two paths are one file on disk: the second
+  /// download would overwrite the first and the install could never verify.
+  @Test func twoPathsThatDifferOnlyInCaseFail() throws {
+    var model = try whisper()
+    var shouted = model.sources[1].files[0]
+    shouted.path = "Tokenizer.json"
+    model.sources[1].files.append(shouted)
+    model.totalBytes += shouted.size
+    #expect(rules(model) == [.duplicatePath])
+  }
+
+  @Test func aFileBeneathAnotherFileFails() throws {
+    var model = try whisper()
+    var nested = model.sources[1].files[0]
+    nested.path = "tokenizer.json/inner.json"
+    model.sources[1].files.append(nested)
+    model.totalBytes += nested.size
+    #expect(rules(model) == [.duplicatePath])
+  }
+
   @Test func aTotalThatDisagreesWithTheFilesFails() throws {
     var model = try whisper()
     model.totalBytes += 1
@@ -147,16 +183,33 @@ struct CatalogTests {
   @Test func availableRequiresTwoDistinctReviewers() throws {
     var model = try whisper()
     model.status = .available
+    #expect(rules(model) == [.availableNeedsTwoReviewers, .availableNeedsNetworkDenyTest])
+
+    model.review = CatalogModel.Review(record: "r.md", networkDenyTest: "pass", reviewer: "alice", secondReviewer: " ")
     #expect(rules(model) == [.availableNeedsTwoReviewers])
 
-    model.review = CatalogModel.Review(record: "r.md", reviewer: "alice", secondReviewer: " ")
-    #expect(rules(model) == [.availableNeedsTwoReviewers])
-
-    model.review = CatalogModel.Review(record: "r.md", reviewer: "alice", secondReviewer: "Alice")
+    model.review = CatalogModel.Review(record: "r.md", networkDenyTest: "pass", reviewer: "alice", secondReviewer: "Alice")
     #expect(rules(model) == [.availableNeedsTwoReviewers])
 
     model.review = twoReviewers()
     #expect(rules(model) == [])
+  }
+
+  /// ADR-9001 lists an entry only with a network-deny result as well as its reviewers.
+  @Test func availableRequiresANetworkDenyResult() throws {
+    var model = try whisper()
+    model.status = .available
+    model.review = twoReviewers()
+    model.review?.networkDenyTest = " "
+    #expect(rules(model) == [.availableNeedsNetworkDenyTest])
+  }
+
+  /// Only Core ML runs in process (ADR-9001); any other format needs an XPC service first.
+  @Test(arguments: [CatalogModel.Format.gguf, .safetensors, .json])
+  func aFormatThatWouldRunOutsideCoreMLFails(format: CatalogModel.Format) throws {
+    var model = try whisper()
+    model.format = format
+    #expect(rules(model) == [.format])
   }
 
   @Test(arguments: ["26.6", "26.6.9", "26", "25.9", "26.x", ""])
@@ -216,7 +269,8 @@ struct CatalogTests {
   }
 
   private func twoReviewers() -> CatalogModel.Review {
-    CatalogModel.Review(record: "docs/models/reviews/x.md", reviewer: "alice", secondReviewer: "bob")
+    CatalogModel.Review(
+      record: "docs/models/reviews/x.md", networkDenyTest: "pass", reviewer: "alice", secondReviewer: "bob")
   }
 }
 

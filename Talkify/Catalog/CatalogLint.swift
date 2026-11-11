@@ -11,6 +11,9 @@ enum CatalogLint {
   /// `us.aws.cdn.hf.co` for the Whisper entry's weights.
   static let redirectHostSuffixes = [".huggingface.co", ".cdn.hf.co"]
   static let licences: Set<String> = ["MIT", "Apache-2.0", "CC-BY-4.0"]
+  /// Formats Core ML parses in process (ADR-9001). Any other needs an XPC service with no
+  /// network entitlement first, and Talkify has none yet.
+  static let inProcessFormats: Set<CatalogModel.Format> = [.coreMLCompiled, .coreMLPackage]
   /// Catalog Models load only past the Core ML fix in macOS 26.7.
   static let minimumSystemVersion: [Int] = [26, 7]
 
@@ -27,6 +30,7 @@ enum CatalogLint {
     case catalogVersion
     case duplicateID
     case emptyID
+    case modelID
     case revision
     case host
     case https
@@ -37,10 +41,12 @@ enum CatalogLint {
     case sha256
     case size
     case totalBytes
+    case format
     case licence
     case minimumSystemVersion
     case availableNeedsMeasured
     case availableNeedsTwoReviewers
+    case availableNeedsNetworkDenyTest
     case revokedNeedsReason
   }
 
@@ -68,7 +74,11 @@ enum CatalogLint {
       found.append(Violation(modelID: model.id, rule: rule, detail: detail))
     }
 
-    if model.id.isEmpty { flag(.emptyID, "") }
+    if model.id.isEmpty {
+      flag(.emptyID, "")
+    } else if !isSlug(model.id) {
+      flag(.modelID, model.id)
+    }
     if model.sources.isEmpty { flag(.noFiles, "no sources") }
     for source in model.sources {
       if !isCommit(source.revision) { flag(.revision, source.revision) }
@@ -100,12 +110,21 @@ enum CatalogLint {
       if file.size <= 0 { flag(.size, "\(file.path) \(file.size)") }
     }
     var paths: Set<String> = []
-    for path in model.installPaths where !paths.insert(path).inserted {
+    for path in model.installPaths where !paths.insert(path.lowercased()).inserted {
       flag(.duplicatePath, path)
+    }
+    // A file cannot also be a folder another file sits in.
+    for path in model.installPaths {
+      let components = path.lowercased().split(separator: "/")
+      for end in components.indices.dropLast() where paths.contains(components[...end].joined(separator: "/")) {
+        flag(.duplicatePath, path)
+        break
+      }
     }
     let sum = model.files.reduce(Int64(0)) { $0 + $1.size }
     if sum != model.totalBytes { flag(.totalBytes, "declared \(model.totalBytes), files sum to \(sum)") }
 
+    if !inProcessFormats.contains(model.format) { flag(.format, model.format.rawValue) }
     if !licences.contains(model.licence.spdx) { flag(.licence, model.licence.spdx) }
     if !meetsMinimumSystemVersion(model.minHardware.minimumSystemVersion) {
       flag(.minimumSystemVersion, model.minHardware.minimumSystemVersion)
@@ -115,6 +134,9 @@ enum CatalogLint {
       if model.measured == nil { flag(.availableNeedsMeasured, "") }
       if !hasTwoReviewers(model.review) {
         flag(.availableNeedsTwoReviewers, "\(model.review?.reviewer ?? "-"), \(model.review?.secondReviewer ?? "-")")
+      }
+      if (model.review?.networkDenyTest ?? "").trimmingCharacters(in: .whitespaces).isEmpty {
+        flag(.availableNeedsNetworkDenyTest, "")
       }
     }
     if model.status == .revoked, model.revoked == nil { flag(.revokedNeedsReason, "") }
@@ -128,6 +150,16 @@ enum CatalogLint {
 
   static func isSHA256(_ digest: String) -> Bool {
     isLowercaseHex(digest, length: 64)
+  }
+
+  /// Lowercase letters and digits in runs joined by single `-` or `.`, so an id can name the
+  /// model's folder, which Delete removes whole, without ever reaching outside the root.
+  static func isSlug(_ id: String) -> Bool {
+    id.split(separator: "-", omittingEmptySubsequences: false)
+      .flatMap { $0.split(separator: ".", omittingEmptySubsequences: false) }
+      .allSatisfy { run in
+        !run.isEmpty && run.utf8.allSatisfy { (48...57).contains($0) || (97...122).contains($0) }
+      }
   }
 
   /// Relative, without `.` or `..` components, so it can never leave the install folder.
