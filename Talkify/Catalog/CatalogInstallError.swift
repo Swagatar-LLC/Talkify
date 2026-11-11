@@ -18,3 +18,31 @@ enum CatalogInstallError: Error, Equatable, Sendable {
   case missingFile(path: String)
   case notInstalled
 }
+
+extension CatalogInstallError: LocalizedError {
+  var errorDescription: String? {
+    switch self {
+    case .revoked(let reason):
+      "This model was withdrawn from the catalog: \(reason)"
+    case .insufficientSpace(let needed, let available):
+      "Not enough free space: the download needs "
+        + "\(Self.size(needed)) and this Mac has \(Self.size(available))."
+    case .httpStatus(_, let status):
+      "The download host answered with HTTP \(status)."
+    case .redirectRefused:
+      "The download host redirected somewhere Talkify does not download from."
+    case .fileTooLarge, .modelTooLarge, .sizeMismatch:
+      "A downloaded file was not the size the catalog pins. Nothing was kept."
+    case .hashMismatch:
+      "A downloaded file did not match the catalog's fingerprint. Nothing was kept."
+    case .missingFile:
+      "A model file is missing or incomplete."
+    case .notInstalled:
+      "This model is not downloaded."
+    }
+  }
+
+  private static func size(_ bytes: Int64) -> String {
+    ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+  }
+}

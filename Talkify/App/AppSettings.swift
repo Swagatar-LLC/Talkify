@@ -39,6 +39,7 @@ final class AppSettings {
     static let insertionDestination = "dictationInsertionDestination"
     static let hudClearsMenuBar = "hudClearsMenuBar"
     static let vocabularyTerms = "vocabularyTerms"
+    static let recognizerModelID = "dictationRecognizerModelID"
     static let historyEnabled = "dictationHistoryEnabled"
     static let historyFolder = "dictationHistoryFolder"
     static let promptShapingEnabled = "dictationPromptShapingEnabled"
@@ -215,6 +216,14 @@ final class AppSettings {
     didSet { defaults.set(vocabularyTerms, forKey: Keys.vocabularyTerms) }
   }
 
+  /// The Catalog Model a Direct Dictation session recognizes with, by its
+  /// catalog id. Empty means Apple Speech, the default. An id the catalog no
+  /// longer lists, or one whose files are gone, falls back to Apple Speech at
+  /// the session rather than being rewritten here.
+  var recognizerModelID: String {
+    didSet { defaults.set(recognizerModelID, forKey: Keys.recognizerModelID) }
+  }
+
   var readAloudVoiceID: String {
     didSet { defaults.set(readAloudVoiceID, forKey: Keys.readAloudVoice) }
   }
@@ -364,6 +373,7 @@ final class AppSettings {
     vocabularyTerms = Vocabulary.sanitized(
       defaults.stringArray(forKey: Keys.vocabularyTerms) ?? []
     )
+    recognizerModelID = defaults.string(forKey: Keys.recognizerModelID) ?? ""
     readAloudVoiceID = defaults.string(forKey: Keys.readAloudVoice) ?? ""
     readAloudTranslates = defaults.bool(forKey: Keys.readAloudTranslates)
     dictationTriggerBinding = Self.storedBinding(
