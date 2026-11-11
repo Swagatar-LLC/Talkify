@@ -55,6 +55,10 @@ _Avoid_: Live Captions
 An Apple-managed, on-device language asset used by the Speech framework.
 _Avoid_: Bundled model, Talkify model, Whisper model
 
+**Recognizer**:
+What turns a **Direct Dictation** session's audio into text. Apple Speech is one; a Catalog Model would be another. It is fed by the session's microphone rather than owning one, and takes the **Vocabulary** as hints ordered likeliest last.
+_Avoid_: Engine, backend, transcriber (Apple's own type)
+
 **Prompt Shaping**:
 An opt-in pass that rewrites finished **Direct Dictation** text through the **On-device model** before insertion, using the session's **Shaping Prompt**.
 _Avoid_: AI cleanup, post-processing, autocorrect

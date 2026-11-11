@@ -85,6 +85,7 @@ struct DirectDictationControllerTests {
     shapeText: @escaping @Sendable (String, ShapingPrompt) async -> String
       = { text, _ in text },
     appliedVocabulary: OSAllocatedUnfairLock<[String]> = .init(initialState: []),
+    recognition: RecognizerFeed? = nil,
     insertOutcome: TextInsertionService.InsertionOutcome = .inserted
   ) -> DirectDictationController.Dependencies {
     DirectDictationController.Dependencies(
@@ -92,14 +93,29 @@ struct DirectDictationControllerTests {
       resolveLocale: { _ in Locale(identifier: "en_US") },
       supportedLocale: { _ in nil },
       retainOnly: { _ in },
-      setVocabulary: { terms in appliedVocabulary.withLock { $0 = terms } },
+      setVocabulary: { terms in
+        appliedVocabulary.withLock { $0 = terms }
+        await recognition?.recognizer.setHints(terms)
+      },
       prewarm: { _ in prewarmed.withLock { $0 = true } },
-      startRecognition: { locale, _, _, _ in
+      startRecognition: { locale, updateHandler, failureHandler, levelHandler in
         startEntries.withLock { $0 += 1 }
         try await startRecognitionBody?(locale)
+        try await recognition?.start(
+          locale: locale,
+          updateHandler: updateHandler,
+          failureHandler: failureHandler,
+          levelHandler: levelHandler
+        )
       },
-      finishRecognition: finishRecognition,
-      cancelRecognition: { cancelCount.withLock { $0 += 1 } },
+      finishRecognition: {
+        guard let recognition else { return try await finishRecognition() }
+        return try await recognition.finish()
+      },
+      cancelRecognition: {
+        cancelCount.withLock { $0 += 1 }
+        await recognition?.cancel()
+      },
       shutDownRecognition: shutDownRecognition,
       // The real service over a faked framework, rather than a second set of
       // stubs: its rules are the ones a session depends on.
@@ -1623,6 +1639,98 @@ struct DirectDictationControllerTests {
     await waitUntil("Finish never delivered") { !recorder.insertedTexts.isEmpty }
 
     #expect(shapedPromptIDs.withLock { $0 } == ["tighten-grammar"])
+    controller.stop()
+  }
+
+  /// The whole session through a Recognizer that is not Apple Speech: the
+  /// Vocabulary arrives as its hints, capture starts in the format it asked
+  /// for, and what it returns is what lands.
+  @Test func aSessionRunsThroughTheRecognizerItIsGiven() async {
+    let recorder = Recorder()
+    let prewarmed = OSAllocatedUnfairLock(initialState: false)
+    let fake = FakeRecognizer()
+    let settings = AppSettings(defaults: freshDefaults())
+    settings.vocabularyTerms = ["Talkify", "Ada Lovelace"]
+    let controller = makeController(
+      settings: settings,
+      dependencies: makeDependencies(
+        recorder: recorder,
+        prewarmed: prewarmed,
+        recognition: RecognizerFeed(recognizer: fake, startCapture: fake.capture(buffers: 3))
+      )
+    )
+    await prepare(controller, prewarmed: prewarmed)
+
+    controller.toggleFromMenu()
+    await waitUntil("Session never reached recording") {
+      controller.sessionStateForTesting == .recording(.latched)
+    }
+    controller.toggleFromMenu()
+    await waitUntil("Finish never delivered") { !recorder.insertedTexts.isEmpty }
+
+    #expect(recorder.insertedTexts == ["heard 480 frames"])
+    #expect(
+      fake.entries == [
+        "hints:Talkify,Ada Lovelace", "start:en_US", "capture:16000",
+        "feed:16000", "feed:16000", "feed:16000", "stopCapture", "finish",
+      ]
+    )
+    controller.stop()
+  }
+
+  /// Escape stops the microphone before the Recognizer hears the cancel, and
+  /// nothing it heard is inserted.
+  @Test func cancellingStopsCaptureBeforeTheRecognizer() async {
+    let recorder = Recorder()
+    let prewarmed = OSAllocatedUnfairLock(initialState: false)
+    let fake = FakeRecognizer()
+    let controller = makeController(
+      dependencies: makeDependencies(
+        recorder: recorder,
+        prewarmed: prewarmed,
+        recognition: RecognizerFeed(recognizer: fake, startCapture: fake.capture(buffers: 1))
+      )
+    )
+    await prepare(controller, prewarmed: prewarmed)
+    controller.toggleFromMenu()
+    await waitUntil("Session never reached recording") {
+      controller.sessionStateForTesting == .recording(.latched)
+    }
+
+    controller.handle(.cancelPressed)
+    await waitUntil("Cancel never reached the Recognizer") {
+      fake.entries.contains("cancel")
+    }
+
+    #expect(Array(fake.entries.suffix(2)) == ["stopCapture", "cancel"])
+    #expect(!fake.entries.contains("finish"))
+    #expect(recorder.insertedTexts.isEmpty)
+    controller.stop()
+  }
+
+  /// A microphone that will not start fails the session with its reason, and
+  /// the Recognizer never hears a buffer.
+  @Test func aCaptureThatCannotStartFailsTheSession() async {
+    let recorder = Recorder()
+    let prewarmed = OSAllocatedUnfairLock(initialState: false)
+    let fake = FakeRecognizer()
+    let controller = makeController(
+      dependencies: makeDependencies(
+        recorder: recorder,
+        prewarmed: prewarmed,
+        recognition: RecognizerFeed(recognizer: fake, startCapture: fake.capture(fails: true))
+      )
+    )
+    await prepare(controller, prewarmed: prewarmed)
+
+    controller.toggleFromMenu()
+    await waitUntil("The failure was never shown") {
+      recorder.messages.contains("no microphone")
+    }
+
+    #expect(controller.sessionStateForTesting == .idle)
+    #expect(!fake.entries.contains { $0.hasPrefix("feed") || $0 == "stopCapture" })
+    #expect(recorder.insertedTexts.isEmpty)
     controller.stop()
   }
 }

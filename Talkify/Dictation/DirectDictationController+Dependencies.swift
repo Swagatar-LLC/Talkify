@@ -7,14 +7,16 @@ import AppKit
 /// fakes instead of a live microphone, Accessibility, and pasteboard.
 extension DirectDictationController {
   struct Dependencies {
-    // Speech recognition, wrapping the SpeechRecognitionService actor.
+    // Speech recognition. Languages and warming are Apple Speech's own; the
+    // session itself runs through a Recognizer, fed by the microphone.
     let setDownloadHandler: @Sendable (
       @escaping @Sendable (SpeechRecognitionService.ModelDownload) -> Void
     ) async -> Void
     let resolveLocale: @Sendable (String?) async throws -> Locale
     let supportedLocale: @Sendable (String) async -> Locale?
     let retainOnly: @Sendable ([Locale]) async -> Void
-    /// The words Apple Speech should expect, applied before anything warms.
+    /// The Vocabulary, handed to the Recognizer as its hints before anything
+    /// warms.
     let setVocabulary: @Sendable ([String]) async -> Void
     let prewarm: @Sendable (Locale) async throws -> Void
     let startRecognition: @Sendable (
@@ -100,6 +102,7 @@ extension DirectDictationController {
       textInsertionService: TextInsertionService
     ) -> Self {
       let speechService = SpeechRecognitionService()
+      let recognition = RecognizerFeed(recognizer: speechService)
       let historyStore = DictationHistoryStore()
 
       return Self(
@@ -107,19 +110,24 @@ extension DirectDictationController {
         resolveLocale: { try await speechService.resolveLocale(identifier: $0) },
         supportedLocale: { await speechService.supportedLocale(identifier: $0) },
         retainOnly: { await speechService.retainOnly(locales: $0) },
-        setVocabulary: { await speechService.setVocabulary($0) },
+        // In the order they were added, the newest last: until something ranks
+        // them, recency is the best guess at what is likeliest.
+        setVocabulary: { await recognition.recognizer.setHints($0) },
         prewarm: { try await speechService.prewarm(locale: $0) },
         startRecognition: { locale, updateHandler, failureHandler, levelHandler in
-          try await speechService.start(
+          try await recognition.start(
             locale: locale,
             updateHandler: updateHandler,
             failureHandler: failureHandler,
             levelHandler: levelHandler
           )
         },
-        finishRecognition: { try await speechService.finish() },
-        cancelRecognition: { await speechService.cancel() },
-        shutDownRecognition: { await speechService.shutDown() },
+        finishRecognition: { try await recognition.finish() },
+        cancelRecognition: { await recognition.cancel() },
+        shutDownRecognition: {
+          await recognition.cancel()
+          await speechService.shutDown()
+        },
         translation: TranslationCoordinator(
           service: TranslationService(client: .live)
         ),
