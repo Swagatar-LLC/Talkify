@@ -44,6 +44,31 @@ enum RecognizerFallback: Equatable, Sendable {
   }
 }
 
+/// What preparing the chosen Catalog Model ended with: loaded and warm, or why every
+/// session will use Apple Speech until the choice or the files change.
+enum CatalogPreparation<Loaded> {
+  case ready(CatalogModel, Loaded)
+  case failed(CatalogModel, RecognizerFallback)
+
+  var model: CatalogModel {
+    switch self {
+    case .ready(let model, _), .failed(let model, _): model
+    }
+  }
+
+  /// Why a session dictating in `language`, a catalog tag, uses Apple Speech, or nil
+  /// when it runs on the model. The language is the session's own: the second
+  /// Dictation Language can be one the model is not listed for when the first is.
+  func fallback(forLanguage language: String) -> RecognizerFallback? {
+    switch self {
+    case .failed(_, let fallback): fallback
+    case .ready(let model, _): model.languages.contains(language) ? nil : .unsupportedLanguage(language)
+    }
+  }
+}
+
+extension CatalogPreparation: Sendable where Loaded: Sendable {}
+
 /// A fallback, attached to the model the user had chosen, as Settings shows it.
 struct RecognizerNotice: Equatable, Sendable {
   let modelID: String

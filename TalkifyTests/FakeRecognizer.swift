@@ -22,6 +22,13 @@ final class FakeRecognizer: Recognizer {
 
   let log = OSAllocatedUnfairLock<[String]>(initialState: [])
   private let fedFrames = OSAllocatedUnfairLock<[AVAudioFrameCount]>(initialState: [])
+  /// What `start` posts once feeding begins: draft text, as Apple Speech
+  /// sends, unless a test asks for Whisper's wordless "heard speech".
+  private let startUpdate: SpeechRecognitionService.Update
+
+  init(startUpdate: SpeechRecognitionService.Update = .init(finalizedText: "", volatileText: "heard")) {
+    self.startUpdate = startUpdate
+  }
 
   var entries: [String] { log.withLock { $0 } }
 
@@ -36,7 +43,7 @@ final class FakeRecognizer: Recognizer {
   ) async throws {
     log.withLock { $0.append("start:\(locale.identifier)") }
     try beginFeeding(Self.format)
-    updateHandler(.init(finalizedText: "", volatileText: "heard"))
+    updateHandler(startUpdate)
   }
 
   func feed(_ buffer: AVAudioPCMBuffer) -> Bool {

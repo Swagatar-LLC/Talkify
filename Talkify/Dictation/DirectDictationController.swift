@@ -66,14 +66,16 @@ final class DirectDictationController {
     settings: AppSettings,
     hudController: DictationHUDController,
     usageTracker: UsageTracker,
-    textInsertionService: TextInsertionService
+    textInsertionService: TextInsertionService,
+    recognizerStore: RecognizerStore
   ) {
     self.init(
       settings: settings,
       dependencies: .live(
         hudController: hudController,
         usageTracker: usageTracker,
-        textInsertionService: textInsertionService
+        textInsertionService: textInsertionService,
+        recognizerStore: recognizerStore
       )
     )
   }
@@ -202,6 +204,14 @@ final class DirectDictationController {
     }
   }
 
+  /// Loads the Recognizer chosen in Settings, or releases the last one. The
+  /// session under way keeps the Recognizer it started with (ADR-0004).
+  func applyRecognizer() {
+    Task { [dependencies] in
+      await dependencies.prepareRecognizer()
+    }
+  }
+
   /// Resolves both picks, drops anything no longer bound to a key, then warms
   /// the primary language. The second warms behind it and never throws: a
   /// model that still needs downloading must not delay the primary key.
@@ -232,6 +242,13 @@ final class DirectDictationController {
 
     if let secondaryLocale {
       try? await dependencies.prewarm(secondaryLocale)
+    }
+
+    // Started, not awaited, like translation below: Apple Speech is warm, and a
+    // Catalog Model still loading (minutes, after an OS update recompiles it)
+    // must not keep the trigger key dead. Sessions use it once it is warm.
+    Task { [dependencies] in
+      await dependencies.prepareRecognizer()
     }
 
     // Started, not awaited, which is what "never fatal" has to mean: this
@@ -680,6 +697,10 @@ final class DirectDictationController {
   }
 
   private func receive(_ update: SpeechRecognitionService.Update) {
+    guard !update.heardSpeech else {
+      send(.speechHeard)
+      return
+    }
     let displayText = update.displayText
     let hasVisibleText = !displayText
       .trimmingCharacters(in: .whitespacesAndNewlines)

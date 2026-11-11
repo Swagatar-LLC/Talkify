@@ -7,6 +7,10 @@ actor SpeechRecognitionService {
   struct Update: Sendable {
     let finalizedText: String
     let volatileText: String
+    /// Voice was heard, with no words to show yet. A Recognizer that posts no
+    /// draft text, such as Whisper, sends this so the session knows it is not
+    /// silent before it finishes.
+    var heardSpeech = false
 
     var displayText: String {
       finalizedText + volatileText

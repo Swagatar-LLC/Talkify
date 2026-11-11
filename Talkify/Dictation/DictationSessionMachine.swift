@@ -45,6 +45,9 @@ struct DictationSessionMachine {
     /// `wasCancelled` covers the torn-down start task.
     case recognitionFailed(wasCancelled: Bool)
     case updateReceived(hasVisibleText: Bool)
+    /// The Recognizer heard voice but has no words to show yet: Whisper
+    /// posts its words only when the session finishes.
+    case speechHeard
     case noSpeechTimedOut
     /// The terminal reset after a finish inserted, a cancel completed,
     /// or a failure was shown.
@@ -109,6 +112,12 @@ struct DictationSessionMachine {
       return recognitionFailed(wasCancelled: wasCancelled)
     case let .updateReceived(hasVisibleText):
       return updateReceived(hasVisibleText: hasVisibleText)
+    case .speechHeard:
+      // Speech without text: the no-speech timeout no longer applies, and
+      // there is no draft to show.
+      guard isSessionActive, !hasSpeech else { return [] }
+      hasSpeech = true
+      return [.stopNoSpeechTimer]
     case .noSpeechTimedOut:
       return hasSpeech ? [] : cancel()
     case .sessionEnded:

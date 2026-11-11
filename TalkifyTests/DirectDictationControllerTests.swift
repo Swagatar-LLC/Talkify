@@ -98,6 +98,7 @@ struct DirectDictationControllerTests {
         await recognition?.recognizer.setHints(terms)
       },
       prewarm: { _ in prewarmed.withLock { $0 = true } },
+      prepareRecognizer: {},
       startRecognition: { locale, updateHandler, failureHandler, levelHandler in
         startEntries.withLock { $0 += 1 }
         try await startRecognitionBody?(locale)
@@ -1675,6 +1676,35 @@ struct DirectDictationControllerTests {
         "feed:16000", "feed:16000", "feed:16000", "stopCapture", "finish",
       ]
     )
+    controller.stop()
+  }
+
+  /// Whisper's wordless "heard speech" keeps the session going without
+  /// drawing an empty draft, and the words still land at the finish.
+  @Test func speechHeardWithoutWordsDrawsNoDraft() async {
+    let recorder = Recorder()
+    let prewarmed = OSAllocatedUnfairLock(initialState: false)
+    let fake = FakeRecognizer(startUpdate: .init(finalizedText: "", volatileText: "", heardSpeech: true))
+    let controller = makeController(
+      dependencies: makeDependencies(
+        recorder: recorder,
+        prewarmed: prewarmed,
+        recognition: RecognizerFeed(recognizer: fake, startCapture: fake.capture(buffers: 2))
+      )
+    )
+    await prepare(controller, prewarmed: prewarmed)
+
+    controller.toggleFromMenu()
+    await waitUntil("Session never reached recording") {
+      controller.sessionStateForTesting == .recording(.latched)
+    }
+    // The update rides a main-actor hop of its own; let it land.
+    for _ in 0..<20 { await Task.yield() }
+    #expect(recorder.count(of: "showLiveText") == 0)
+
+    controller.toggleFromMenu()
+    await waitUntil("Finish never delivered") { !recorder.insertedTexts.isEmpty }
+    #expect(recorder.insertedTexts == ["heard 320 frames"])
     controller.stop()
   }
 

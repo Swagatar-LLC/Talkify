@@ -231,4 +231,20 @@ struct DictationSessionMachineTests {
     #expect(machine.state == .finishing)
     #expect(effects.contains(.showFinalizing))
   }
+
+  /// Whisper posts its words only at the end; hearing a voice is what keeps
+  /// its session past the no-speech timeout, and there is no draft to show.
+  @Test func speechHeardWithoutWordsOutlastsTheNoSpeechTimeout() {
+    var machine = recordingMachine()
+    #expect(machine.reduce(.speechHeard) == [.stopNoSpeechTimer])
+    #expect(machine.reduce(.speechHeard).isEmpty)
+    #expect(machine.reduce(.noSpeechTimedOut).isEmpty)
+    #expect(machine.state == .recording(.held(startedAt: t0)))
+  }
+
+  @Test func speechHeardOutsideASessionDoesNothing() {
+    var machine = Machine()
+    #expect(machine.reduce(.speechHeard).isEmpty)
+    #expect(machine.state == .idle)
+  }
 }

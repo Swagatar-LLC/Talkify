@@ -139,7 +139,7 @@ struct RecognizerStoreTests {
     settings.recognizerModelID = model.id
     let store = Self.store(model, client: client, settings: settings, systemVersion: Self.macOS2662)
 
-    let loaded = await store.recognizer(for: Locale(identifier: "en_US")) { _, _ in "whisper" }
+    let loaded = await store.prepareChosenModel { _, _ in "whisper" }
     #expect(loaded == nil)
     #expect(store.notice == nil)
     #expect(client.steps.isEmpty)
@@ -292,7 +292,14 @@ struct RecognizerStoreTests {
     #expect(store.notice == nil)
   }
 
-  // Every fallback, each driven by an injected failure.
+  // Every failure preparing the chosen model, each driven by an injected failure. The
+  // store only says what it found; the session that falls back posts the notice
+  // (DictationRecognizersTests).
+
+  private static func fallback<Loaded>(_ preparation: CatalogPreparation<Loaded>?) -> RecognizerFallback? {
+    guard case .failed(_, let fallback)? = preparation else { return nil }
+    return fallback
+  }
 
   @Test(arguments: [
     (CatalogInstallError.missingFile(path: "a/weight.bin") as any Error, RecognizerFallback.filesMissing),
@@ -301,26 +308,25 @@ struct RecognizerStoreTests {
     (CatalogInstallError.hashMismatch(path: "a/weight.bin"), .hashMismatch),
     (CatalogInstallError.revoked("Bad weights."), .revoked("Bad weights.")),
   ])
-  func aVerifyFailureFallsBackToAppleSpeechWithItsNotice(error: any Error, expected: RecognizerFallback) async throws {
+  func aVerifyFailureIsReturnedWithoutLoadingOrDownloading(error: any Error, expected: RecognizerFallback) async throws {
     let model = try Self.whisper()
     let client = ScriptedClient(.init(installed: true, verifyError: error))
     let store = Self.store(model, client: client)
     store.use(model)
 
     var loads = 0
-    let loaded = await store.recognizer(for: Locale(identifier: "en_US")) { _, _ in loads += 1; return "whisper" }
+    let prepared = await store.prepareChosenModel { _, _ in loads += 1; return "whisper" }
 
-    #expect(loaded == nil)
+    #expect(Self.fallback(prepared) == expected)
+    #expect(prepared?.model.id == model.id)
     #expect(loads == 0)
-    #expect(store.notice?.fallback == expected)
-    #expect(store.notice?.modelID == model.id)
-    #expect(store.notice?.message.contains("Apple Speech was used") == true)
+    #expect(store.notice == nil)
     // The choice stands: nothing re-downloads or switches on its own.
     #expect(store.selectedModelID == model.id)
-    #expect(!client.steps.contains("download"))
+    #expect(client.steps == ["verify"])
   }
 
-  @Test func aRevokedModelFallsBackWithoutTouchingItsFiles() async throws {
+  @Test func aRevokedModelFailsWithoutTouchingItsFiles() async throws {
     let installed = try Self.whisper()
     let client = ScriptedClient(.init(installed: true))
     let (settings, _) = Self.freshSettings()
@@ -328,12 +334,9 @@ struct RecognizerStoreTests {
     let revoked = try Self.whisper(revoked: .init(date: "2026-12-01", reason: "Bad weights.", severity: .block))
     let store = Self.store(revoked, client: client, settings: settings)
 
-    let loaded = await store.recognizer(for: Locale(identifier: "en_US")) { _, _ in "whisper" }
+    let prepared = await store.prepareChosenModel { _, _ in "whisper" }
 
-    #expect(loaded == nil)
-    #expect(store.notice?.fallback == .revoked("Bad weights."))
-    #expect(store.notice?.message == "Whisper large-v3-turbo was withdrawn from the catalog "
-      + "(Bad weights), so Apple Speech was used.")
+    #expect(Self.fallback(prepared) == .revoked("Bad weights."))
     #expect(client.steps.isEmpty)
   }
 
@@ -343,65 +346,63 @@ struct RecognizerStoreTests {
     let store = Self.store(model, client: client)
     store.use(model)
 
-    let loaded = await store.recognizer(for: Locale(identifier: "en_US")) { _, _ in "whisper" }
+    let prepared = await store.prepareChosenModel { _, _ in "whisper" }
+    guard case .ready(_, let loaded)? = prepared else {
+      Issue.record("expected a loaded model, got \(String(describing: prepared))")
+      return
+    }
     #expect(loaded == "whisper")
-    #expect(store.notice == nil)
   }
 
-  @Test func anUnsupportedLanguageFallsBackForThatSessionOnly() async throws {
-    let model = try Self.whisper()
-    let client = ScriptedClient(.init(installed: true))
-    let store = Self.store(model, client: client)
-    store.use(model)
-
-    let german = await store.recognizer(for: Locale(identifier: "de_DE")) { _, _ in "whisper" }
-    #expect(german == nil)
-    #expect(store.notice?.fallback == .unsupportedLanguage("de"))
-    #expect(store.notice?.message.hasSuffix("so Apple Speech was used for that session.") == true)
-    #expect(client.steps.isEmpty)
-
-    let english = await store.recognizer(for: Locale(identifier: "en_GB")) { _, _ in "whisper" }
-    #expect(english == "whisper")
-    #expect(store.selectedModelID == model.id)
-  }
-
-  @Test func aRuntimeRefusingTheLanguageIsTheSameNotice() async throws {
+  @Test func aLanguageIsJudgedPerSessionNotWhenLoading() async throws {
     let model = try Self.whisper()
     let store = Self.store(model, client: ScriptedClient(.init(installed: true)))
     store.use(model)
 
-    let loaded: String? = await store.recognizer(for: Locale(identifier: "en_US")) { _, _ in
-      throw WhisperRecognizer.Failure.unsupportedLanguage("en_US")
-    }
-    #expect(loaded == nil)
-    #expect(store.notice?.fallback == .unsupportedLanguage("en_US"))
+    let prepared = try #require(await store.prepareChosenModel { _, _ in "whisper" })
+    #expect(prepared.fallback(forLanguage: "en") == nil)
+    #expect(prepared.fallback(forLanguage: "xx") == .unsupportedLanguage("xx"))
+    #expect(RecognizerStore.catalogLanguage(of: Locale(identifier: "en_GB")) == "en")
   }
 
-  @Test func aLoadErrorFallsBackWithTheRuntimesReason() async throws {
+  @Test func aRuntimeRefusingTheLanguageIsTheSameFallback() async throws {
+    let model = try Self.whisper()
+    let store = Self.store(model, client: ScriptedClient(.init(installed: true)))
+    store.use(model)
+
+    let prepared: CatalogPreparation<String>? = await store.prepareChosenModel { _, _ in
+      throw WhisperRecognizer.Failure.unsupportedLanguage("en_US")
+    }
+    #expect(Self.fallback(prepared) == .unsupportedLanguage("en_US"))
+  }
+
+  @Test func aLoadErrorFailsWithTheRuntimesReason() async throws {
     let model = try Self.whisper()
     let client = ScriptedClient(.init(installed: true))
     let store = Self.store(model, client: client)
     store.use(model)
 
-    let loaded: String? = await store.recognizer(for: Locale(identifier: "en_US")) { _, folder in
+    let prepared: CatalogPreparation<String>? = await store.prepareChosenModel { _, folder in
       #expect(folder.path == "/verified")
       throw WhisperRecognizer.Failure.loadFailed("Core ML ran out of memory.")
     }
 
-    #expect(loaded == nil)
-    #expect(store.notice?.fallback == .loadFailed("Core ML ran out of memory."))
-    #expect(store.notice?.message.hasPrefix("Whisper large-v3-turbo failed to load, so Apple Speech was used.") == true)
+    #expect(Self.fallback(prepared) == .loadFailed("Core ML ran out of memory."))
     #expect(client.steps == ["verify"])
   }
 
-  @Test func aHealthyChosenModelLoadsFromTheVerifiedFolderWithNoNotice() async throws {
+  @Test func aHealthyChosenModelLoadsFromTheVerifiedFolder() async throws {
     let model = try Self.whisper()
     let client = ScriptedClient(.init(installed: true))
     let store = Self.store(model, client: client)
     store.use(model)
 
-    let loaded = await store.recognizer(for: Locale(identifier: "en_US")) { model, folder in
+    let prepared = await store.prepareChosenModel { model, folder in
       "\(model.id) \(folder.path)"
+    }
+    guard case .ready(_, let loaded)? = prepared else {
+      Issue.record("expected a loaded model, got \(String(describing: prepared))")
+      return
     }
     #expect(loaded == "whisper-large-v3-turbo-coreml /verified")
     #expect(store.notice == nil)
@@ -410,8 +411,8 @@ struct RecognizerStoreTests {
   @Test func appleSpeechChosenNeverVerifiesOrLoads() async throws {
     let client = ScriptedClient(.init(installed: true))
     let store = Self.store(try Self.whisper(), client: client)
-    let loaded = await store.recognizer(for: Locale(identifier: "en_US")) { _, _ in "whisper" }
-    #expect(loaded == nil)
+    let prepared = await store.prepareChosenModel { _, _ in "whisper" }
+    #expect(prepared == nil)
     #expect(store.notice == nil)
     #expect(client.steps.isEmpty)
   }
