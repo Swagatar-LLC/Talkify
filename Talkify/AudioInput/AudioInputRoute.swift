@@ -16,6 +16,7 @@ final class AudioInputRoute: NSObject, @unchecked Sendable {
 
   struct CaptureState: Sendable {
     var sequence: UInt64 = 0
+    var generation: UInt64 = 0
     var isMonitoring = false
     var level: Float = 0
     var error: String?
@@ -35,6 +36,18 @@ final class AudioInputRoute: NSObject, @unchecked Sendable {
   }
 
   var deviceID: AudioDeviceID? { lock.withLock { currentDeviceID } }
+  var generation: UInt64 { lock.withLock { captureState.generation } }
+
+  /// Each replacement tap owns its events; a retiring tap cannot light the
+  /// meter under a different device's label.
+  func beginCapture() -> UInt64 {
+    let generation = lock.withLock {
+      captureState.generation += 1
+      return captureState.generation
+    }
+    publish(.stopped, generation: generation)
+    return generation
+  }
   var isDictationActive: Bool { lock.withLock { dictationActive } }
 
   /// Engine notifications can beat main-actor inventory notifications after
@@ -43,10 +56,16 @@ final class AudioInputRoute: NSObject, @unchecked Sendable {
     guard lock.withLock({ enabled }) else { return nil }
     guard let readHardware else { return deviceID }
     let snapshot = try readHardware()
-    let preferred = lock.withLock { preferredUID }
-    return AudioInputSelection(
-      preferredUID: preferred, devices: snapshot.devices, defaultDeviceID: snapshot.defaultDeviceID
-    ).effectiveInput?.deviceID
+    return lock.withLock {
+      guard enabled else { return nil }
+      let resolved = AudioInputSelection(
+        preferredUID: preferredUID, devices: snapshot.devices, defaultDeviceID: snapshot.defaultDeviceID
+      ).effectiveInput?.deviceID
+      // Recovery may beat inventory delivery. Remember its route so a quick
+      // reconnect still notifies capture even if the UI never saw the outage.
+      currentDeviceID = resolved
+      return resolved
+    }
   }
 
   /// Synchronous notification: an idle meter releases its microphone before
@@ -66,6 +85,10 @@ final class AudioInputRoute: NSObject, @unchecked Sendable {
       self.preferredUID = preferredUID
       guard currentDeviceID != deviceID else { return false }
       currentDeviceID = deviceID
+      captureState.generation += 1
+      captureState.isMonitoring = false
+      captureState.level = 0
+      captureState.error = nil
       return true
     }
     if changed { NotificationCenter.default.post(name: Self.didChange, object: self) }
@@ -83,8 +106,9 @@ final class AudioInputRoute: NSObject, @unchecked Sendable {
     lock.withLock { captureHandler = handler }
   }
 
-  func publish(_ event: CaptureEvent) {
-    let (state, handler) = lock.withLock {
+  func publish(_ event: CaptureEvent, generation: UInt64? = nil) {
+    let delivery = lock.withLock { () -> (CaptureState, (@Sendable (CaptureState) -> Void)?)? in
+      guard generation == nil || generation == captureState.generation else { return nil }
       captureState.sequence += 1
       switch event {
       case .started:
@@ -105,6 +129,6 @@ final class AudioInputRoute: NSObject, @unchecked Sendable {
       }
       return (captureState, captureHandler)
     }
-    handler?(state)
+    if let (state, handler) = delivery { handler?(state) }
   }
 }

@@ -141,7 +141,13 @@ final class AudioInputController {
     selection = AudioInputSelection(
       preferredUID: preferredInputUID, devices: devices, defaultDeviceID: defaultDeviceID
     )
+    let generation = route.generation
     route.update(deviceID: effectiveInput?.deviceID, preferredUID: preferredInputUID)
+    if route.generation != generation {
+      level = 0
+      isMonitoring = false
+      captureError = nil
+    }
   }
 
   private func observePreference() {
@@ -158,7 +164,8 @@ final class AudioInputController {
   }
 
   private func receive(_ state: AudioInputRoute.CaptureState) {
-    guard !stopped, state.sequence > lastCaptureEvent else { return }
+    guard !stopped, state.sequence > lastCaptureEvent,
+      state.generation == route.generation else { return }
     lastCaptureEvent = state.sequence
     isMonitoring = state.isMonitoring && (monitoringRequested || route.isDictationActive)
     level = isMonitoring ? state.level : 0

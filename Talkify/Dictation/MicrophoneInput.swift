@@ -97,7 +97,7 @@ final class MicrophoneInput: @unchecked Sendable {
   /// dead engine behind, and a headset settling its profile can post more
   /// than one.
   private var recoveryPending = false
-  /// Hands a converted buffer to the Recognizer; false when it was dropped.
+  /// Nil for level-only capture; otherwise feeds whichever Recognizer is active.
   private let feed: (@Sendable (AVAudioPCMBuffer) -> Bool)?
   private let failureHandler: @Sendable (InputError) -> Void
   /// Normalized microphone level (0–1) per tap buffer, for the HUD's
@@ -107,6 +107,7 @@ final class MicrophoneInput: @unchecked Sendable {
 
   private var running = false
   private var reportedFailure = false
+  private var captureGeneration: UInt64?
 
   init(
     feed: (@Sendable (AVAudioPCMBuffer) -> Bool)? = nil,
@@ -144,26 +145,24 @@ final class MicrophoneInput: @unchecked Sendable {
       stopObservingConfigurationChanges()
       stopObservingRouteChanges()
       audioEngine.stop()
-      route?.publish(.failed(error.localizedDescription))
+      route?.publish(.failed(error.localizedDescription), generation: stateLock.withLock { captureGeneration })
       if feed != nil { route?.setDictationActive(false) }
       AppLog.audio.error(
         "engine failed to start: \(error.localizedDescription, privacy: .public)"
       )
       throw error
     }
-    route?.publish(.started)
     AppLog.audio.info(
       "capturing at \(self.audioEngine.inputNode.outputFormat(forBus: 0).sampleRate, privacy: .public) Hz"
     )
   }
 
-  /// Installs the tap and starts the engine.
-  ///
-  /// The tap takes no format. Handing it one captured moments earlier throws
-  /// an Objective-C exception the moment the hardware has moved on ("Failed
-  /// to create tap due to format mismatch"), which Swift cannot catch, so the
-  /// app would die rather than recover. Nil means the bus's live format.
+  /// Explicit device binding leaves the node's output format cached from the
+  /// OS default. A routed tap must use the hardware input format instead, or
+  /// switching between 24 kHz Bluetooth and 48 kHz built-in fails with -10868.
   private func startCapturing(on engine: AVAudioEngine, into outputFormat: AVAudioFormat) throws {
+    let generation = route?.beginCapture()
+    stateLock.withLock { captureGeneration = generation }
     let authorization = AVCaptureDevice.authorizationStatus(for: .audio)
     guard authorization != .denied, authorization != .restricted else {
       throw InputError.permissionDenied
@@ -178,7 +177,8 @@ final class MicrophoneInput: @unchecked Sendable {
       guard status == noErr else { throw InputError.routingFailed(status) }
     }
     let inputNode = engine.inputNode
-    guard Self.hasUsableHardwareInput(inputNode.inputFormat(forBus: 0)) else {
+    let hardwareFormat = inputNode.inputFormat(forBus: 0)
+    guard Self.hasUsableHardwareInput(hardwareFormat) else {
       throw InputError.unavailable
     }
     // Changing CurrentDevice is our own configuration change, not a failed
@@ -187,8 +187,8 @@ final class MicrophoneInput: @unchecked Sendable {
     inputNode.removeTap(onBus: 0)
 
     let converterBox = ConverterBox(outputFormat: outputFormat)
-    inputNode.installTap(onBus: 0, bufferSize: 1_024, format: nil) { [weak self] buffer, _ in
-      self?.receive(buffer, converterBox: converterBox)
+    inputNode.installTap(onBus: 0, bufferSize: 1_024, format: route == nil ? nil : hardwareFormat) { [weak self] buffer, _ in
+      self?.receive(buffer, converterBox: converterBox, generation: generation)
     }
 
     engine.prepare()
@@ -198,6 +198,7 @@ final class MicrophoneInput: @unchecked Sendable {
       inputNode.removeTap(onBus: 0)
       throw error
     }
+    route?.publish(.started, generation: generation)
   }
 
   private func observeConfigurationChanges(of engine: AVAudioEngine) {
@@ -314,7 +315,7 @@ final class MicrophoneInput: @unchecked Sendable {
     let engine = stateLock.withLock { audioEngine }
     engine.stop()
     engine.inputNode.removeTap(onBus: 0)
-    route?.publish(.stopped)
+    route?.publish(.stopped, generation: stateLock.withLock { captureGeneration })
     if feed != nil { route?.setDictationActive(false) }
   }
 
@@ -325,20 +326,19 @@ final class MicrophoneInput: @unchecked Sendable {
     if feed != nil, running { route?.setDictationActive(false) }
   }
 
-  private func receive(_ buffer: AVAudioPCMBuffer, converterBox: ConverterBox) {
-    publishLevel(of: buffer)
-    // Nothing reaches recognition after a failure: the session is ending, and
-    // audio from a microphone that already failed is not worth transcribing.
+  private func receive(_ buffer: AVAudioPCMBuffer, converterBox: ConverterBox, generation: UInt64?) {
+    if let generation, route?.generation != generation { return }
+    publishLevel(of: buffer, generation: generation)
     guard let feed, !stateLock.withLock({ reportedFailure }) else { return }
     do {
       let convertedBuffer = try convert(buffer, using: converterBox)
       if !feed(convertedBuffer) {
-        reportFailure(.analyzerBackpressure)
+        reportFailure(.analyzerBackpressure, generation: generation)
       }
     } catch let error as InputError {
-      reportFailure(error)
+      reportFailure(error, generation: generation)
     } catch {
-      reportFailure(.conversionFailed(error.localizedDescription))
+      reportFailure(.conversionFailed(error.localizedDescription), generation: generation)
     }
   }
 
@@ -380,7 +380,7 @@ final class MicrophoneInput: @unchecked Sendable {
   /// RMS of the first channel (vDSP, so the audio thread barely notices)
   /// mapped to 0–1 over a 50 dB window: a quiet room sits near zero and
   /// speech fills most of the range.
-  private func publishLevel(of buffer: AVAudioPCMBuffer) {
+  private func publishLevel(of buffer: AVAudioPCMBuffer, generation: UInt64?) {
     guard levelHandler != nil || route != nil,
        let samples = buffer.floatChannelData?[0],
        buffer.frameLength > 0
@@ -392,21 +392,27 @@ final class MicrophoneInput: @unchecked Sendable {
     let db = 20 * log10(max(rms, .leastNormalMagnitude))
     let level = min(1, max(0, (db + 50) / 50))
     levelHandler?(level)
-    route?.publish(.level(level))
+    route?.publish(.level(level), generation: generation)
   }
 
-  private func reportFailure(_ error: InputError) {
-    let shouldReport = stateLock.withLock { () -> Bool in
-      guard !reportedFailure else { return false }
-      reportedFailure = true
-      return true
-    }
+  private func reportFailure(_ error: InputError, generation: UInt64? = nil) {
+    // A retiring tap can finish conversion after its replacement has started.
+    // Validate and terminate on the same queue that opens replacement engines.
+    recoveryQueue.async { [weak self] in
+      guard let self else { return }
+      if let generation, route?.generation != generation { return }
+      let shouldReport = stateLock.withLock { () -> Bool in
+        guard !reportedFailure else { return false }
+        reportedFailure = true
+        return true
+      }
 
-    guard shouldReport else { return }
-    route?.publish(.failed(error.localizedDescription))
-    AppLog.audio.error(
-      "microphone failed: \(error.errorDescription ?? "unknown", privacy: .public)"
-    )
-    failureHandler(error)
+      guard shouldReport else { return }
+      route?.publish(.failed(error.localizedDescription), generation: generation ?? stateLock.withLock { captureGeneration })
+      AppLog.audio.error(
+        "microphone failed: \(error.errorDescription ?? "unknown", privacy: .public)"
+      )
+      failureHandler(error)
+    }
   }
 }

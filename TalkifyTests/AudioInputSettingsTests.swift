@@ -173,8 +173,15 @@ struct AudioInputSettingsTests {
     try await settle()
     #expect(harness.runtime.isSettingsVisible)
     let reopenedRequests = await requests.count
-    #expect(reopenedRequests == 2)
+    #expect(reopenedRequests >= 2, "activation may also recheck permission")
     #expect(capture.counts.starts == 1, "reopening cannot compete with dictation")
+    for _ in 0..<5 {
+      harness.window.close()
+      harness.controller?.show()
+      try await settle()
+      #expect(harness.runtime.isSettingsVisible)
+      #expect(capture.counts.starts == 1, "repeated presentations cannot interrupt dictation")
+    }
     harness.audio.route.setDictationActive(false)
     #expect(capture.counts.starts == 2, "visible Settings resumes idle capture")
     let sounds = try #require(descendants(harness.window.contentView as Any).first {
