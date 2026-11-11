@@ -1,14 +1,11 @@
 import AVFAudio
-import Speech
 import Testing
 @testable import Talkify
 
 struct MicrophoneInputTests {
   @Test func absentEffectiveInputRefusesCaptureWithoutOpeningSystemMicrophone() throws {
-    let (_, continuation) = AsyncStream.makeStream(of: AnalyzerInput.self)
-    defer { continuation.finish() }
     let input = MicrophoneInput(
-      analyzerContinuation: continuation,
+      feed: { _ in true },
       failureHandler: { _ in },
       route: AudioInputRoute()
     )

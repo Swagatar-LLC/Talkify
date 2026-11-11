@@ -303,6 +303,7 @@ struct AudioInputSettingsTests {
         requestMicrophoneAccess: request)
       if fullSettings {
         controller = SettingsWindowController(settings: settings, sounds: HUDSounds(), runtimeState: runtime,
+          recognizers: RecognizerStore.live(settings: settings),
           usageTracker: UsageTracker(store: UsageStore(fileURL: FileManager.default.temporaryDirectory
             .appending(path: "AudioInputSettingsTests-\(UUID().uuidString).json"))),
           updater: SparkleUpdaterService(), launchAtLogin: LaunchAtLoginService(), audioInput: audio)

@@ -2,9 +2,17 @@
 
 Verified locally on 2026-11-11: MacBook Pro (Mac16,5), arm64, macOS 27.2.1 (26B131), Xcode 27.2. This is a local-fork verification record, not release acceptance. Nothing was installed, pushed or merged. OS input/output settings and the installed app's preferences were not changed. Probe audio was discarded.
 
-## Automated and runtime results
+## Integration onto Catalog Models main
 
-The Debug build and full app-hosted suite pass with local signing overrides documented in AudioInput.md. The final xcresult contains 489 test cases: 485 passed, four existing media-fixture skips, no failures. Parameterized executions are counted separately by Xcode; use the summary's test-case totals consistently.
+The implementation was replayed once onto fork base `4251a88`, retaining ADR-9001's Catalog Models and feed-based Recognizers. Persistent input selection is ADR-9002. `RecognizerFeed` supplies the route to `MicrophoneInput` for either Recognizer; `SpeechRecognitionService` remains a PCM consumer, not a capture owner. The corpus harness links the shared audio sources and builds successfully.
+
+The current full Debug suite contains **616 test cases: 607 passed, nine skipped, zero failures**, from `.verification/VerifiedTests.xcresult` and its `test-summary.json`. The device subtotal counts 710 passing parameterized executions; it is not the distinct test-case total. The nine skips comprise the four original media fixtures, two local Catalog Model fixture checks, two opt-in render checks and the opt-in insertion benchmark.
+
+The adapted PCM-feed probe passes basic live capture (10 buffers, 33 meter snapshots, zero errors). A switching run passed with 19 buffers, 45 snapshots and zero errors. Repeated rapid AirPods → built-in → System → built-in switching is **intermittent**: a repeat failed to reopen the last device with Core Audio status `1852797029`. The probe now waits for three buffers and snapshots per phase instead of treating one retiring buffer as proof of replacement capture. This does not eliminate the hardware transition failure, and no seamless-recovery claim follows from the passing run. Exact logs and limitations are in `.verification/report.md`; physical acceptance remains open.
+
+## Prior implementation verification
+
+Before integration onto Catalog Models, the feature branch's Debug build and full app-hosted suite passed with the signing overrides documented in AudioInput.md. That earlier xcresult contained 489 test cases: 485 passed, four existing media-fixture skips, no failures. The matrix below records that phase, not a new physical acceptance run. Parameterized executions are counted separately by Xcode; use the summary's test-case totals consistently.
 
 | Scenario | Observed result | Evidence boundary |
 | --- | --- | --- |

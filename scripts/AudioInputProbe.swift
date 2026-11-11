@@ -1,7 +1,6 @@
 // Compile with the production audio sources; see docs/AudioInput.md.
 import AVFoundation
 import Foundation
-import Speech
 
 @main
 struct AudioInputProbe {
@@ -51,23 +50,18 @@ struct AudioInputProbe {
     monitor.start()
     try await Task.sleep(for: .seconds(1))
     precondition(counts.values.1 > 1 && counts.values.2.isEmpty, "idle meter must receive real tap levels")
-    let (stream, continuation) = AsyncStream.makeStream(of: AnalyzerInput.self, bufferingPolicy: .bufferingNewest(64))
-    let consumer = Task {
-      for await _ in stream { counts.buffer() }
-    }
     let input = MicrophoneInput(
-      analyzerContinuation: continuation,
+      feed: { _ in counts.buffer(); return true },
       failureHandler: { error in print("Capture failed: \(error.localizedDescription)") },
       route: route
     )
-    // AnalyzerInput on macOS 27 requires integer PCM; idle metering never
-    // constructs AnalyzerInput and therefore does not expose this constraint.
+    // Use the integer PCM format requested by Apple Speech on macOS 27.
     let format = AVAudioFormat(commonFormat: .pcmFormatInt16,
       sampleRate: 16_000, channels: 1, interleaved: false)!
     do {
       try input.start(outputFormat: format)
       try await Task.sleep(for: .seconds(1))
-      precondition(counts.values.0 > 0, "dictation must receive analyzer buffers")
+      precondition(counts.values.0 > 0, "dictation must receive Recognizer buffers")
       if CommandLine.arguments.contains("--switch") {
         for device in snapshot.devices { print("Available input: \(device.name) [\(device.deviceID)]") }
         guard let alternate = snapshot.devices.first(where: {
@@ -75,8 +69,6 @@ struct AudioInputProbe {
         }) else {
           print("Live switch UNVERIFIED: no alternate built-in input was found")
           input.stop()
-          continuation.finish()
-          await consumer.value
           monitor.stop()
           return
         }
@@ -89,32 +81,30 @@ struct AudioInputProbe {
           let selection = AudioInputSelection(preferredUID: preferred,
             devices: snapshot.devices, defaultDeviceID: snapshot.defaultDeviceID)
           route.update(deviceID: selection.effectiveInput?.deviceID, preferredUID: preferred)
-          // Bluetooth engine teardown can outlast a one-second sample window.
+          // One retiring buffer is not proof the replacement tap is running.
+          // Bluetooth teardown can also outlast a one-second sample window.
           for _ in 0..<300 {
             try await Task.sleep(for: .milliseconds(100))
-            if counts.values.0 > before.0 || !counts.values.2.isEmpty { break }
+            if (counts.values.0 >= before.0 + 3 && counts.values.1 >= before.1 + 3)
+              || !counts.values.2.isEmpty { break }
           }
           let after = counts.values
-          print("Active-capture \(label): \(after.0 - before.0) analyzer buffers, \(after.1 - before.1) meter snapshots; failures \(after.2); resolved device \(String(describing: route.deviceID))")
-          precondition(after.0 > before.0 && after.1 > before.1 && after.2.isEmpty)
+          print("Active-capture \(label): \(after.0 - before.0) Recognizer buffers, \(after.1 - before.1) meter snapshots; failures \(after.2); resolved device \(String(describing: route.deviceID))")
+          precondition(after.0 >= before.0 + 3 && after.1 >= before.1 + 3 && after.2.isEmpty)
         }
       }
       input.stop()
-      continuation.finish()
-      await consumer.value
       let beforeIdleResume = counts.values.1
       try await Task.sleep(for: .seconds(1))
       precondition(counts.values.1 > beforeIdleResume, "idle meter must resume real tap levels")
       monitor.stop()
     } catch {
       input.stop()
-      continuation.finish()
       monitor.stop()
-      consumer.cancel()
       throw error
     }
     let (buffers, levels, failures) = counts.values
-    print("Real capture: \(buffers) analyzer buffers; \(levels) monitoring snapshots; \(failures.count) errors")
+    print("Real capture: \(buffers) Recognizer buffers; \(levels) monitoring snapshots; \(failures.count) errors")
     precondition(buffers > 0 && levels > 0 && failures.isEmpty)
     precondition(!route.isDictationActive)
     print("Verified idle meter → dictation → idle meter handoff; audio was discarded, never saved")

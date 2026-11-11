@@ -1,6 +1,6 @@
 # Audio input routing (Swagatar fork)
 
-`AudioInputController` is the main-actor observable model for the input Settings section. `AppDelegate` owns one instance and injects it into Direct Dictation. Pass that **same instance** into Settings; do not create a second controller or capture engine in a view.
+Routing is recorded in [ADR-9002](adr/9002-persistent-audio-input-selection.md). `AudioInputController` is the main-actor observable model for the input Settings section. `AppDelegate` owns one instance and injects it into Direct Dictation. Pass that **same instance** into Settings; do not create a second controller or capture engine in a view.
 
 ## Settings interface
 
@@ -12,6 +12,8 @@
 - `await startMonitoring()`: call from the input section's `.task`. Requests microphone permission via the existing permission service and starts a level-only capture while idle. `stopMonitoring()`: call on disappearance/window closure. If a permission dialog resolves after the view closes, capture does not start.
 - `refresh()`: refresh devices/default and clear transient discovery errors; useful when the app becomes active again. It does not request permission. Reinvoke `startMonitoring()` after the user changes permission in System Settings.
 - `stop()`: application shutdown only, not view disappearance. Removes hardware listeners, stops the idle meter, and invalidates the capture route. Listener tokens also unregister on deallocation.
+
+`RecognizerFeed` owns `MicrophoneInput` for both Apple Speech and Catalog Models. Its feed closure delivers converted PCM to the chosen Recognizer; routing does not live in `SpeechRecognitionService` and is not tied to `AnalyzerInput`.
 
 During Direct Dictation, the idle meter releases its engine synchronously **before** dictation opens the device. Settings then consumes the existing dictation tap's levels. Closing Settings never stops dictation; ending dictation resumes idle metering only if the section is still open. Audio is never saved by monitoring. Capture events carry complete sequenced snapshots so main-actor scheduling cannot resurrect stale meter state.
 
@@ -50,10 +52,10 @@ xcrun swiftc -swift-version 6 -parse-as-library \
 .verification/audio-input-probe --capture
 ```
 
-The probe checks live inventory, UID resolution and System fallback without changing OS settings. `--capture` additionally exercises idle meter → analyzer buffers → idle meter for three seconds, discarding all audio. It runs capture only when microphone permission is already authorized, otherwise prints `UNVERIFIED` and never requests a prompt. The probe is not a substitute for app-level permission, physical unplug/reconnect, or Bluetooth testing.
+The probe checks live inventory, UID resolution and System fallback without changing OS settings. `--capture` additionally exercises idle meter → Recognizer buffers → idle meter for three seconds, discarding all audio. It runs capture only when microphone permission is already authorized, otherwise prints `UNVERIFIED` and never requests a prompt. The probe is not a substitute for app-level permission, physical unplug/reconnect, or Bluetooth testing.
 
 Hardware checks and their current results are recorded in [AudioInputVerification.md](AudioInputVerification.md). Injected inventory changes are not physical unplug/reconnect evidence.
 
-The probe also accepts `--capture --switch`. It switches its own active capture from the current System device to an alternate built-in microphone, then to System through a deliberately missing UID, then back. It checks analyzer buffers and meter snapshots after each change, and idle-meter resumption after dictation. This never changes the OS default or simulates a physical disconnection; the missing-UID and return stages are policy changes. Bluetooth engine teardown has a bounded 30-second wait. The probe uses integer PCM for AnalyzerInput compatibility on macOS 27.
+The probe also accepts `--capture --switch`. It switches its own active capture from the current System device to an alternate built-in microphone, then to System through a deliberately missing UID, then back. It checks Recognizer buffers and meter snapshots after each change, and idle-meter resumption after dictation. This never changes the OS default or simulates a physical disconnection; the missing-UID and return stages are policy changes. Bluetooth engine teardown has a bounded 30-second wait. The probe uses integer PCM for AnalyzerInput compatibility on macOS 27.
 
 Capture snapshots carry a route/tap generation as well as a sequence. Changing the effective device immediately clears the displayed level; events queued by an older source and late callbacks from replaced taps cannot relight it. Engine failures are validated on the same serial queue that replaces engines. Capture's live hardware resolution updates its remembered route so a quick reconnect still triggers recovery even when the UI never observed the outage. Explicitly bound taps use the hardware input format, not the node's cached output format; the latter can retain the OS default's sample rate and fail when the selected device differs.

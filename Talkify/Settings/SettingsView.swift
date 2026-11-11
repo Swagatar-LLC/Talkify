@@ -27,6 +27,7 @@ struct SettingsView: View {
     usageTracker: UsageTracker,
     updater: SparkleUpdaterService,
     launchAtLogin: LaunchAtLoginService,
+    audioInput: AudioInputController,
     initialSection: SettingsSection = .appearance,
     onClose: @escaping () -> Void
   ) {
@@ -37,6 +38,7 @@ struct SettingsView: View {
     self.usageTracker = usageTracker
     self.updater = updater
     self.launchAtLogin = launchAtLogin
+    self.audioInput = audioInput
     self.onClose = onClose
     _selectedSection = State(initialValue: initialSection)
   }

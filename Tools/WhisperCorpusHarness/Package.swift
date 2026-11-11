@@ -20,6 +20,7 @@ let package = Package(
       dependencies: [.product(name: "WhisperKit", package: "argmax-oss-swift")],
       // The store belongs to Settings and reads AppSettings, which this tool does not build.
       exclude: [
+        "Talkify/AudioInput/AudioInputController.swift",
         "Talkify/Catalog/catalog.json",
         "Talkify/Catalog/RecognizerStore.swift",
         "Talkify/Catalog/RecognizerStore+Live.swift",
