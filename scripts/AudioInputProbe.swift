@@ -4,6 +4,15 @@ import Foundation
 
 @main
 struct AudioInputProbe {
+  struct CaptureCheckFailed: LocalizedError {
+    let message: String
+    var errorDescription: String? { message }
+  }
+
+  static func requireCapture(_ condition: Bool, _ message: String) throws {
+    if !condition { throw CaptureCheckFailed(message: message) }
+  }
+
   final class Counts: @unchecked Sendable {
     private let lock = NSLock()
     private var buffers = 0
@@ -47,21 +56,27 @@ struct AudioInputProbe {
     let counts = Counts()
     route.setCaptureHandler { counts.receive($0) }
     let monitor = AudioInputLevelMonitor(route: route)
+    defer { monitor.stop() }
     monitor.start()
-    try await Task.sleep(for: .seconds(1))
-    precondition(counts.values.1 > 1 && counts.values.2.isEmpty, "idle meter must receive real tap levels")
+    for _ in 0..<300 {
+      try await Task.sleep(for: .milliseconds(100))
+      if counts.values.1 > 1 || !counts.values.2.isEmpty { break }
+    }
+    try requireCapture(counts.values.1 > 1 && counts.values.2.isEmpty,
+      "idle meter must receive real tap levels: \(counts.values)")
     let input = MicrophoneInput(
       feed: { _ in counts.buffer(); return true },
       failureHandler: { error in print("Capture failed: \(error.localizedDescription)") },
       route: route
     )
+    defer { input.stop() }
     // Use the integer PCM format requested by Apple Speech on macOS 27.
     let format = AVAudioFormat(commonFormat: .pcmFormatInt16,
       sampleRate: 16_000, channels: 1, interleaved: false)!
     do {
       try input.start(outputFormat: format)
       try await Task.sleep(for: .seconds(1))
-      precondition(counts.values.0 > 0, "dictation must receive Recognizer buffers")
+      try requireCapture(counts.values.0 > 0, "dictation must receive Recognizer buffers")
       if CommandLine.arguments.contains("--switch") {
         for device in snapshot.devices { print("Available input: \(device.name) [\(device.deviceID)]") }
         guard let alternate = snapshot.devices.first(where: {
@@ -72,11 +87,16 @@ struct AudioInputProbe {
           monitor.stop()
           return
         }
-        for (label, preferred) in [
-          ("explicit input", alternate.id),
-          ("missing UID fallback (simulated absence)", "Talkify-probe-missing-device"),
-          ("preferred input restored (policy change, not physical reconnect)", alternate.id)
-        ] {
+        // Repeat restoration in one capture owner: a single successful switch
+        // can hide overlapping lifetimes of the old and replacement engines.
+        let phases = (1...3).flatMap { cycle in
+          [
+            ("cycle \(cycle) explicit input", alternate.id),
+            ("cycle \(cycle) missing UID fallback (simulated absence)", "Talkify-probe-missing-device"),
+            ("cycle \(cycle) preferred input restored (policy change, not physical reconnect)", alternate.id)
+          ]
+        }
+        for (label, preferred) in phases {
           let before = counts.values
           let selection = AudioInputSelection(preferredUID: preferred,
             devices: snapshot.devices, defaultDeviceID: snapshot.defaultDeviceID)
@@ -90,13 +110,14 @@ struct AudioInputProbe {
           }
           let after = counts.values
           print("Active-capture \(label): \(after.0 - before.0) Recognizer buffers, \(after.1 - before.1) meter snapshots; failures \(after.2); resolved device \(String(describing: route.deviceID))")
-          precondition(after.0 >= before.0 + 3 && after.1 >= before.1 + 3 && after.2.isEmpty)
+          try requireCapture(after.0 >= before.0 + 3 && after.1 >= before.1 + 3 && after.2.isEmpty,
+            "\(label) must deliver three Recognizer buffers and meter snapshots without errors")
         }
       }
       input.stop()
       let beforeIdleResume = counts.values.1
       try await Task.sleep(for: .seconds(1))
-      precondition(counts.values.1 > beforeIdleResume, "idle meter must resume real tap levels")
+      try requireCapture(counts.values.1 > beforeIdleResume, "idle meter must resume real tap levels")
       monitor.stop()
     } catch {
       input.stop()
@@ -105,7 +126,7 @@ struct AudioInputProbe {
     }
     let (buffers, levels, failures) = counts.values
     print("Real capture: \(buffers) Recognizer buffers; \(levels) monitoring snapshots; \(failures.count) errors")
-    precondition(buffers > 0 && levels > 0 && failures.isEmpty)
+    try requireCapture(buffers > 0 && levels > 0 && failures.isEmpty, "capture must deliver buffers and levels without errors")
     precondition(!route.isDictationActive)
     print("Verified idle meter → dictation → idle meter handoff; audio was discarded, never saved")
   }

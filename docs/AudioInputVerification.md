@@ -4,6 +4,35 @@ Verified locally on 2026-11-11: MacBook Pro (Mac16,5), arm64, macOS 27.2.1 (26B1
 
 ## Integration onto Catalog Models main
 
+### Restoration follow-up (2026-11-11)
+
+The original three-phase switching probe reproduced the final built-in reopening
+failure in three consecutive baseline runs (`1852797029`, Core Audio `nope`).
+Recovery kept the stopped engine in a local `previous` reference while binding and
+starting its replacement. Removing that overlapping lifetime passed three
+consecutive runs of the same live probe: 21/19/21 Recognizer buffers,
+47/45/48 monitoring snapshots, zero errors. The diagnostic source differs from
+the committed production fix only by its explanatory comment. No settle delay,
+retry loop, OS default change or Recognizer architecture change was introduced.
+
+**Acceptance remains blocked.** The strengthened probe now checks three cycles
+per capture owner. Before it could complete, explicit AirPods/System capture began
+opening successfully but delivering no buffers, including during the initial idle
+meter's bounded 30-second wait. A diagnostic starting on built-in delivered real
+buffers and levels, then stalled at System/AirPods fallback with zero buffers.
+The successful earlier three-phase runs do not prove the extended check passed.
+The final Debug build and full suite passed (607 passed, nine skipped, zero failed).
+Exact commands, failed and successful logs, diagnostic controls and the local
+revision are recorded in `.verification/restoration-report.md`.
+
+Jeff must confirm the headset is ready to supply microphone audio, and, if needed,
+reconnect it during an attended check before rerunning the production probe three
+times. No physical connection, permission or system audio setting was changed to
+force a green result. A production first-buffer timeout is still absent; the
+probe's deadline is a test deadline, not an implemented recovery guarantee.
+
+### Earlier integration evidence
+
 The implementation was replayed once onto fork base `4251a88`, retaining ADR-9001's Catalog Models and feed-based Recognizers. Persistent input selection is ADR-9002. `RecognizerFeed` supplies the route to `MicrophoneInput` for either Recognizer; `SpeechRecognitionService` remains a PCM consumer, not a capture owner. The corpus harness links the shared audio sources and builds successfully.
 
 The current full Debug suite contains **616 test cases: 607 passed, nine skipped, zero failures**, from `.verification/VerifiedTests.xcresult` and its `test-summary.json`. The device subtotal counts 710 passing parameterized executions; it is not the distinct test-case total. The nine skips comprise the four original media fixtures, two local Catalog Model fixture checks, two opt-in render checks and the opt-in insertion benchmark.

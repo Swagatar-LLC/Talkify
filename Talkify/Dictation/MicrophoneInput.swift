@@ -277,9 +277,11 @@ final class MicrophoneInput: @unchecked Sendable {
     }
     guard let outputFormat else { return }
 
-    let previous = stateLock.withLock { audioEngine }
-    previous.stop()
-    previous.inputNode.removeTap(onBus: 0)
+    // Do not retain the stopped engine across replacement startup. Its HAL
+    // resources survive stop(), and overlapping engines can reject a return
+    // from Bluetooth to built-in input with kAudioHardwareIllegalOperationError.
+    audioEngine.stop()
+    audioEngine.inputNode.removeTap(onBus: 0)
 
     let engine = AVAudioEngine()
     stateLock.withLock { audioEngine = engine }
