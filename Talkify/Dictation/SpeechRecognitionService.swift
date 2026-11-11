@@ -93,7 +93,6 @@ actor SpeechRecognitionService {
 
   private struct ActiveSession {
     let prepared: PreparedSession
-    let input: MicrophoneInput
     let continuation: AsyncStream<AnalyzerInput>.Continuation
     let resultTask: Task<String, any Error>
   }
@@ -105,6 +104,10 @@ actor SpeechRecognitionService {
   /// Words every analyzer built from here on is biased toward.
   private var vocabulary: [String] = []
   private var activeSession: ActiveSession?
+  /// The live session's input, readable off the actor: `feed` runs on the
+  /// audio thread and cannot wait for the actor between two buffers.
+  private nonisolated let feedTarget =
+    OSAllocatedUnfairLock<AsyncStream<AnalyzerInput>.Continuation?>(initialState: nil)
   /// Locales reserved with AssetInventory, oldest first. The system caps how
   /// many an app may hold (`maximumReservedLocales`), so the oldest is
   /// released when a new one would exceed it.
@@ -243,8 +246,7 @@ actor SpeechRecognitionService {
   func start(
     locale: Locale,
     updateHandler: @escaping @Sendable (Update) -> Void,
-    failureHandler: @escaping @Sendable (String) -> Void,
-    levelHandler: (@Sendable (Float) -> Void)? = nil
+    beginFeeding: @Sendable (AVAudioFormat) throws -> Void
   ) async throws {
     guard activeSession == nil else {
       throw RecognitionError.sessionAlreadyActive
@@ -268,34 +270,26 @@ actor SpeechRecognitionService {
       return accumulator.completedText
     }
 
-    let input = MicrophoneInput(
-      analyzerContinuation: continuation,
-      failureHandler: { error in
-        failureHandler(error.localizedDescription)
-      },
-      levelHandler: levelHandler
-    )
-
     activeSession = ActiveSession(
       prepared: prepared,
-      input: input,
       continuation: continuation,
       resultTask: resultTask
     )
+    feedTarget.withLock { $0 = continuation }
 
     do {
       // Start capturing before SpeechAnalyzer finishes attaching to the
       // stream. Bluetooth inputs can take hundreds of milliseconds to become
       // ready, and the stream keeps those early buffers until the analyzer
       // starts consuming them.
-      try input.start(outputFormat: prepared.audioFormat)
+      try beginFeeding(prepared.audioFormat)
       try Task.checkCancellation()
       try await prepared.analyzer.start(inputSequence: stream)
       try Task.checkCancellation()
     } catch {
       activeSession = nil
+      feedTarget.withLock { $0 = nil }
       continuation.finish()
-      input.stop()
       await prepared.analyzer.cancelAndFinishNow()
       resultTask.cancel()
       throw error
@@ -307,8 +301,7 @@ actor SpeechRecognitionService {
       throw RecognitionError.noActiveSession
     }
     activeSession = nil
-
-    session.input.stop()
+    feedTarget.withLock { $0 = nil }
     session.continuation.finish()
 
     do {
@@ -326,8 +319,7 @@ actor SpeechRecognitionService {
   func cancel() async {
     guard let session = activeSession else { return }
     activeSession = nil
-
-    session.input.stop()
+    feedTarget.withLock { $0 = nil }
     session.continuation.finish()
     await session.prepared.analyzer.cancelAndFinishNow()
     session.resultTask.cancel()
@@ -502,5 +494,23 @@ actor SpeechRecognitionService {
     Task { [weak self] in
       try? await self?.prewarm(locale: locale)
     }
+  }
+}
+
+/// Apple Speech as a Recognizer. Its hints are the Vocabulary's contextual
+/// strings, so they bias the analyzer when it is built, never on the keypress.
+extension SpeechRecognitionService: Recognizer {
+  func setHints(_ hints: [String]) async {
+    await setVocabulary(hints)
+  }
+
+  /// A buffer with no session to hear it is dropped quietly, the way a
+  /// finished stream always swallowed the tail of a stopping microphone.
+  nonisolated func feed(_ buffer: AVAudioPCMBuffer) -> Bool {
+    guard let continuation = feedTarget.withLock({ $0 }) else { return true }
+    if case .dropped = continuation.yield(AnalyzerInput(buffer: buffer)) {
+      return false
+    }
+    return true
   }
 }

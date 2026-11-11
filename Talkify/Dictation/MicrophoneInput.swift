@@ -1,6 +1,5 @@
 import AVFAudio
 import Accelerate
-import Speech
 import os
 
 final class MicrophoneInput: @unchecked Sendable {
@@ -88,7 +87,8 @@ final class MicrophoneInput: @unchecked Sendable {
   /// dead engine behind, and a headset settling its profile can post more
   /// than one.
   private var recoveryPending = false
-  private let analyzerContinuation: AsyncStream<AnalyzerInput>.Continuation
+  /// Hands a converted buffer to the Recognizer; false when it was dropped.
+  private let feed: @Sendable (AVAudioPCMBuffer) -> Bool
   private let failureHandler: @Sendable (InputError) -> Void
   /// Normalized microphone level (0–1) per tap buffer, for the HUD's
   /// voice-reactive visual. Called on the audio thread.
@@ -99,11 +99,11 @@ final class MicrophoneInput: @unchecked Sendable {
   private var reportedFailure = false
 
   init(
-    analyzerContinuation: AsyncStream<AnalyzerInput>.Continuation,
+    feed: @escaping @Sendable (AVAudioPCMBuffer) -> Bool,
     failureHandler: @escaping @Sendable (InputError) -> Void,
     levelHandler: (@Sendable (Float) -> Void)? = nil
   ) {
-    self.analyzerContinuation = analyzerContinuation
+    self.feed = feed
     self.failureHandler = failureHandler
     self.levelHandler = levelHandler
   }
@@ -261,11 +261,12 @@ final class MicrophoneInput: @unchecked Sendable {
 
   private func receive(_ buffer: AVAudioPCMBuffer, converterBox: ConverterBox) {
     publishLevel(of: buffer)
+    // Nothing reaches recognition after a failure: the session is ending, and
+    // audio from a microphone that already failed is not worth transcribing.
+    guard !stateLock.withLock({ reportedFailure }) else { return }
     do {
       let convertedBuffer = try convert(buffer, using: converterBox)
-      let result = analyzerContinuation.yield(AnalyzerInput(buffer: convertedBuffer))
-
-      if case .dropped = result {
+      if !feed(convertedBuffer) {
         reportFailure(.analyzerBackpressure)
       }
     } catch let error as InputError {
@@ -337,7 +338,6 @@ final class MicrophoneInput: @unchecked Sendable {
     AppLog.audio.error(
       "microphone failed: \(error.errorDescription ?? "unknown", privacy: .public)"
     )
-    analyzerContinuation.finish()
     failureHandler(error)
   }
 }
