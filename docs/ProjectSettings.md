@@ -27,6 +27,8 @@ recognise — the Sparkle keys never reached the bundle that way.
 
 - `SUFeedURL` = `https://raw.githubusercontent.com/tornikegomareli/Talkify/main/appcast.xml`
 - `SUPublicEDKey` = public half of the EdDSA signing key; the private half is in the login Keychain, shared with Camus (Sparkle intends one key per developer)
+- `SURequireSignedFeed` = true (fork, ADR-9001): the appcast itself must carry an EdDSA signature. `release/swagatar-release.sh publish` signs it; upstream's unsigned feed offers a fork build nothing
+- `SUVerifyUpdateBeforeExtraction` = true: Sparkle refuses to start with a signed feed required unless the archive's signature is also checked before it is unpacked
 - `SUEnableAutomaticChecks` = true, `SUScheduledCheckInterval` = 86400 (daily)
 - `SUAllowsAutomaticUpdates` = true (automatic *downloading* still defaults off)
 

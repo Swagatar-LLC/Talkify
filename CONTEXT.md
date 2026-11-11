@@ -20,7 +20,7 @@ Two things in Talkify are on-device models, and they are not the same thing. A *
 - Sparkle is confined to `Talkify/Updates/`; nothing else imports it
 - WhisperKit is pinned to an exact version and confined to `Talkify/Whisper/`; it is handed only the files the installer has just re-hashed, with its downloader off, and Apple Speech stays the default Recognizer
 - Insertion and the HUD stay pure Apple frameworks
-- Apple's `FoundationModels` is where **Prompt Shaping** runs. It is a system framework holding a system model, so the one-dependency rule and the nothing-leaves-the-Mac promise both hold with a language model in the app: there is no key, no account, and no request
+- Apple's `FoundationModels` is where **Prompt Shaping** runs. It is a system framework holding a system model, so the dependency rule and the nothing-leaves-the-Mac promise both hold with a language model in the app: there is no key, no account, and no request
 - `Translation` and `NaturalLanguage` are the other two frameworks that read the user's words rather than carry them: the first for **Dictate and Translate**, the second to name the language of a **Read Aloud** selection
 
 ## Language
@@ -246,14 +246,14 @@ _Avoid_: Transcript history, cloud analytics
 - The HUD shows a language tag only while a second **Dictation Language** is configured
 - Speech models use Apple's `lingering` retention policy
 - Talkify prepares the selected speech model shortly after launch
-- Talkify biases recognition with a user-authored **Vocabulary**; it does not bundle, train, or modify speech models, and does not bundle, train, or fine-tune the **On-device model** either: both belong to macOS, which is why the whole app is a few megabytes
+- Talkify biases recognition with a user-authored **Vocabulary**; it does not bundle, train, or modify speech models (on the Swagatar fork it still bundles none, and downloads a **Catalog Model** only when the user asks for one), and does not bundle, train, or fine-tune the **On-device model** either: both belong to macOS, which is why the whole app is a few megabytes
 - A **Vocabulary Term** is a word or short phrase the user typed in Settings, at most 100 of them, which is Apple's ceiling for contextual strings
 - The Vocabulary is applied when an analyzer is prepared, never on the keypress; editing it rebuilds the warm analyzers so the next session carries the change
 - Failing to bias never fails a session: it is a hint, and an analyzer that refused it transcribes as an empty Vocabulary does
 - The Vocabulary holds only what the user typed; nothing is derived from what was dictated, so no recognized text is persisted by it
 - One Vocabulary serves both dictation languages, because a name is spelled the same way whichever language surrounds it
 - Onboarding installs the Apple-managed language asset only when it is missing and waits for completion
-- Talkify uses Apple Speech exclusively and has no Whisper fallback
+- Talkify uses Apple Speech by default and as every session's fallback. On the Swagatar fork a user may download one **Catalog Model**, Whisper large-v3-turbo, and pick it as the **Recognizer**; upstream remains Apple Speech only, with no Whisper (ADR-9001)
 - Language selectors show only locales supported by Apple Speech
 - Version 1 uses the current macOS default microphone
 - Talkify follows system input-device changes between sessions; a device change during an active session may end that session

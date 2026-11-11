@@ -12,6 +12,14 @@
 	     login Keychain and is never in the repository. -->
 	<key>SUPublicEDKey</key>
 	<string>CS7EqGMvprKkjontSt/uLAG3gkw4CSwaMKVLd+W1UV4=</string>
+	<!-- The appcast itself must carry an EdDSA signature, not only each
+	     update's archive (ADR-9001): the feed decides what is offered.
+	     Sparkle refuses to start with this on unless the archive is also
+	     verified before extraction. -->
+	<key>SURequireSignedFeed</key>
+	<true/>
+	<key>SUVerifyUpdateBeforeExtraction</key>
+	<true/>
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
 	<!-- Once a day. Talkify is a menu-bar app people leave running for weeks,

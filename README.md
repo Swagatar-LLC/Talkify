@@ -31,7 +31,7 @@
 
 ## Privacy
 
-Everything is on-device: Apple's `SpeechAnalyzer`/`SpeechTranscriber` for recognition, `AVSpeechSynthesizer` for Read Aloud, `Translation` for translation, and `FoundationModels` for prompt shaping. That last one is a language model, and it is Apple's, running here: there is no key, no account, and no request. Talkify makes no network requests, stores no audio, and keeps no history beyond the local usage metrics you can see in Insights.
+Everything is on-device: Apple's `SpeechAnalyzer`/`SpeechTranscriber` for recognition, `AVSpeechSynthesizer` for Read Aloud, `Translation` for translation, and `FoundationModels` for prompt shaping. That last one is a language model, and it is Apple's, running here: there is no key, no account, and no request. Apart from its daily update check, Talkify connects to the network only to download a speech model, once, when you tap Download in Settings → Recognizer; nothing you say is ever sent. It stores no audio and keeps no history beyond the local usage metrics you can see in Insights.
 
 Two caveats. Read Aloud reads a selection through Accessibility where it can,
 and by copying it where it cannot, which is any web page: the selection passes
@@ -208,6 +208,15 @@ report needs to contain to be actionable.
 Start from an issue. A pull request that arrives without one behind it may be
 closed, however good the code is, because design belongs in the issue where it is
 still cheap to change.
+
+## Acknowledgements
+
+- [Sparkle](https://github.com/sparkle-project/Sparkle) (MIT) updates the app.
+- [WhisperKit](https://github.com/argmaxinc/WhisperKit) by Argmax (MIT) runs the
+  optional Whisper speech model on this fork.
+- [Whisper](https://github.com/openai/whisper) large-v3-turbo by OpenAI (MIT),
+  in the [Core ML conversion](https://huggingface.co/argmaxinc/whisperkit-coreml)
+  by Argmax (MIT), is downloaded only if you choose it.
 
 ## License
 [MIT](LICENSE)
