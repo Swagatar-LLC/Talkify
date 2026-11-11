@@ -26,6 +26,10 @@ struct UpdatesTests {
     #expect(feed?.hasPrefix("https://") == true, "SUFeedURL is missing or not https")
     // An EdDSA public key is 32 bytes, base64-encoded.
     #expect(Data(base64Encoded: key ?? "")?.count == 32)
+    // ADR-9001: the feed itself is signed, and Sparkle starts with that only
+    // when the archive is verified before extraction too.
+    #expect(bundle.object(forInfoDictionaryKey: "SURequireSignedFeed") as? Bool == true)
+    #expect(bundle.object(forInfoDictionaryKey: "SUVerifyUpdateBeforeExtraction") as? Bool == true)
 
     let updater = SparkleUpdaterService()
     updater.start()
@@ -41,7 +45,7 @@ struct UpdatesTests {
     #expect(!SettingsSection.updates.icon.isEmpty)
   }
 
-  /// Sparkle is the one third-party dependency and it stays behind
+  /// Sparkle is one of two third-party dependencies and it stays behind
   /// `Talkify/Updates/` (CLAUDE.md). This fails the moment another file imports
   /// it, which is the point: the rule is only real if something checks.
   @Test func onlyTheUpdatesModuleImportsSparkle() throws {

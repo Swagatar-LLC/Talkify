@@ -46,10 +46,13 @@ work back.
   concurrency complete
 - AppKit is the shell: lifecycle, status item, non-activating panels
 - SwiftUI for windowed UI (Settings, onboarding), hosted in the AppKit shell
-- Apple Speech only (`SpeechAnalyzer`/`SpeechTranscriber`), no Whisper
-- Exactly one third-party dependency: Sparkle, for self-updating, quarantined
-  behind `Talkify/Updates/SparkleUpdaterService.swift`. Adding a second is a
-  decision to raise, not to make.
+- Apple Speech by default (`SpeechAnalyzer`/`SpeechTranscriber`). On the
+  Swagatar fork only, a user may install one Catalog Model, Whisper through
+  WhisperKit, as an opt-in Recognizer (`docs/adr/9001-catalog-models.md`)
+- Two third-party dependencies, each confined to one folder: Sparkle, for
+  self-updating, behind `Talkify/Updates/SparkleUpdaterService.swift`, and on
+  the fork only WhisperKit, pinned to an exact version, in `Talkify/Whisper/`.
+  Adding another is a decision to raise, not to make.
 - Scaffolding values (bundle ID, entitlements, signing, Info.plist keys):
   `docs/ProjectSettings.md`
 
@@ -61,6 +64,7 @@ work back.
 - `Talkify/DropTranscription/` — dragging a media file at the notch: `DragWatcher`/`DropZone` (the gesture), `FileTranscriptionService` (its own analyzer, sharing nothing with dictation's prewarmed one), `StagedTranscript`/`TranscriptDestination` (where a transcript lives and lands), `TranscriptOffer` (the card's whole life — countdown, drag, copy, expiry), and `HUD/` its four state views plus their controller.
 - `Talkify/CoreHUD/` — **only what both features share**: `HUDStage` owns the one panel and arbitrates who holds the shape; `HUDSurface` draws the black shape, its fillets and its reveal; plus the sounds, the pure geometry seams (`HUDPlacement`, `HUDNotchGeometry`, tested) and `Shaders/` (ADR-0002; they compile into one Metal library whatever folder they sit in, so they stay together). Anything one feature alone draws belongs in that feature's `HUD/`. Canvas previews live next to the views; the harness uses a volatile defaults suite.
 - `Talkify/Translation/` — Dictate and Translate, whole: `TranslationCoordinator` is the only thing either caller touches (dictation asks it for a session's pair and for a draft's translation; Settings drives the install and reads the state straight off it). Under it, `TranslationService` holds every rule and no framework type, `TranslationClient+Live` is the one place `import Translation` is allowed apart from `TranslationDownloadTask`, and that task exists because Apple installs a model only from a SwiftUI View modifier — `TranslationSession(installedSource:)` throws for a model this Mac lacks and never fetches one, so an install can only start in Settings.
+- `Talkify/Catalog/` and `Talkify/Whisper/` — fork-only Catalog Models (ADR-9001): the bundled `catalog.json` and its lint, the installer that stages, hashes and promotes a download, the Recognizer store and its Apple Speech fallback; `Whisper/` is the one folder that imports WhisperKit, always with local paths and downloading off.
 - `Talkify/ReadAloud/` — speaking selected text: controller, `VoiceCatalog`, and the read-only `FocusedSelectionReader` (never touches insertion).
 - `Talkify/Settings/` — the borderless Settings window: shell (`SettingsView`), navigation model (`SettingsSections`), `Sections/` one file per pane, `Components/` the reusable design system (`SettingsTheme/Card/Row/PickerRow/ButtonStyle`, key recorder, drag handle).
 - `Talkify/Updates/` — Sparkle, wrapped so nothing else imports it: the appcast is a static file in the repo, updates are EdDSA-verified, and the activation policy flips for Sparkle's windows because they misplace themselves under `LSUIElement`.

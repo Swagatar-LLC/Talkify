@@ -133,6 +133,11 @@ publish() {
 </rss>
 XML
 
+  # The app sets SURequireSignedFeed, so an unsigned feed offers nothing.
+  "$SIGN_UPDATE" "$staging/appcast.xml"
+  "$SIGN_UPDATE" --verify "$staging/appcast.xml" \
+    || fail "the appcast's own signature does not verify"
+
   # Release notes accumulate in fork-unreleased.md as changes land, so a
   # release ships the changelog that was written next to the work instead of
   # one reconstructed from git log at publish time.
