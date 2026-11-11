@@ -10,6 +10,7 @@ struct SettingsWindowTests {
       settings: settings,
       sounds: HUDSounds(),
       runtimeState: SettingsRuntimeState(),
+      recognizers: RecognizerPreviewFixtures.store(),
       usageTracker: UsageTracker(store: UsageStore(
         fileURL: FileManager.default.temporaryDirectory
           .appending(path: "TalkifySettingsWindowTests-" + UUID().uuidString + ".json")
@@ -31,7 +32,7 @@ struct SettingsWindowTests {
   @Test func settingsSectionsStayFocusedOnImplementedFeatures() {
     let expected: [SettingsSection] = [
       .general, .appearance, .sounds, .dictation, .promptShaping,
-      .dropTranscription, .readAloud, .language, .vocabulary, .shortcuts, .updates,
+      .dropTranscription, .readAloud, .language, .recognizer, .vocabulary, .shortcuts, .updates,
       .insights,
     ]
     #expect(SettingsSection.allCases == expected)

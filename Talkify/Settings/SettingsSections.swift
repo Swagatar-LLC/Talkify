@@ -21,6 +21,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
   case dropTranscription
   case readAloud
   case language
+  case recognizer
   case vocabulary
   case shortcuts
   case updates
@@ -39,6 +40,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     case .dropTranscription: "Drop Transcription"
     case .readAloud: "Read Aloud"
     case .language: "Language"
+    case .recognizer: "Recognizer"
     case .vocabulary: "Vocabulary"
     case .shortcuts: "Shortcuts"
     case .updates: "Updates"
@@ -56,6 +58,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     case .dropTranscription: "Transcribe audio and video files"
     case .readAloud: "Choose the voice that reads selected text"
     case .language: "Choose your languages"
+    case .recognizer: "Choose what turns your voice into text"
     case .vocabulary: "Teach it your words"
     case .shortcuts: "Rebind Direct Dictation triggers and Read Aloud"
     case .updates: "Keep Talkify current"
@@ -73,6 +76,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     case .dropTranscription: "square.and.arrow.down"
     case .readAloud: "speaker.wave.2"
     case .language: "globe"
+    case .recognizer: "waveform.and.mic"
     case .vocabulary: "character.book.closed"
     case .shortcuts: "keyboard"
     case .updates: "arrow.down.circle"

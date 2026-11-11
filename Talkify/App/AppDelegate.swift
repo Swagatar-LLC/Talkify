@@ -12,6 +12,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private var readAloudController: ReadAloudController?
   private var settingsWindowController: SettingsWindowController?
   private var usageTracker: UsageTracker?
+  /// The chosen Recognizer and every Catalog Model's install state, shared by Settings
+  /// and, once sessions use it, Direct Dictation.
+  private var recognizerStore: RecognizerStore?
   private let settingsRuntimeState = SettingsRuntimeState()
   private let updaterService = SparkleUpdaterService()
   private let launchAtLoginService = LaunchAtLoginService()
@@ -49,6 +52,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     let settings = AppSettings()
     self.settings = settings
+    recognizerStore = RecognizerStore.live(settings: settings)
     // One shape, two features. The stage owns the window and hands it out;
     // each feature's HUD controller only decides what its surface says.
     let stage = HUDStage(settings: settings)
@@ -242,12 +246,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   }
 
   private func showSettings() {
-    guard let settings, let usageTracker else { return }
+    guard let settings, let usageTracker, let recognizerStore else { return }
     if settingsWindowController == nil {
       settingsWindowController = SettingsWindowController(
         settings: settings,
         sounds: HUDSounds(),
         runtimeState: settingsRuntimeState,
+        recognizers: recognizerStore,
         usageTracker: usageTracker,
         updater: updaterService,
         launchAtLogin: launchAtLoginService

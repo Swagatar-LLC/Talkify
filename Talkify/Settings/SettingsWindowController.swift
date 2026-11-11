@@ -20,6 +20,7 @@ final class SettingsWindowController: NSWindowController {
     settings: AppSettings,
     sounds: HUDSounds,
     runtimeState: SettingsRuntimeState,
+    recognizers: RecognizerStore,
     usageTracker: UsageTracker,
     updater: SparkleUpdaterService,
     launchAtLogin: LaunchAtLoginService
@@ -35,6 +36,7 @@ final class SettingsWindowController: NSWindowController {
         settings: settings,
         sounds: sounds,
         runtimeState: runtimeState,
+        recognizers: recognizers,
         usageTracker: usageTracker,
         updater: updater,
         launchAtLogin: launchAtLogin,
