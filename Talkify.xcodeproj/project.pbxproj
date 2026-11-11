@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		9ESPARK03000000000000003 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 9ESPARK02000000000000002 /* Sparkle */; };
+		9EWHKIT03000000000000003 /* WhisperKit in Frameworks */ = {isa = PBXBuildFile; productRef = 9EWHKIT02000000000000002 /* WhisperKit */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -57,6 +58,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				9ESPARK03000000000000003 /* Sparkle in Frameworks */,
+				9EWHKIT03000000000000003 /* WhisperKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -109,6 +111,7 @@
 			name = Talkify;
 			packageProductDependencies = (
 				9ESPARK02000000000000002 /* Sparkle */,
+				9EWHKIT02000000000000002 /* WhisperKit */,
 			);
 			productName = Talkify;
 			productReference = 9E87DA66302384C5007A1A70 /* Talkify.app */;
@@ -167,6 +170,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				9ESPARK01000000000000001 /* XCRemoteSwiftPackageReference "Sparkle" */,
+				9EWHKIT01000000000000001 /* XCRemoteSwiftPackageReference "argmax-oss-swift" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 9E87DA67302384C5007A1A70 /* Products */;
@@ -514,6 +518,14 @@
 				minimumVersion = 2.8.0;
 			};
 		};
+		9EWHKIT01000000000000001 /* XCRemoteSwiftPackageReference "argmax-oss-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/argmaxinc/argmax-oss-swift.git";
+			requirement = {
+				kind = exactVersion;
+				version = 1.1.1;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -521,6 +533,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 9ESPARK01000000000000001 /* XCRemoteSwiftPackageReference "Sparkle" */;
 			productName = Sparkle;
+		};
+		9EWHKIT02000000000000002 /* WhisperKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 9EWHKIT01000000000000001 /* XCRemoteSwiftPackageReference "argmax-oss-swift" */;
+			productName = WhisperKit;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
