@@ -268,7 +268,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   }
 
   private func showSettings() {
-    guard let settings, let usageTracker, let recognizerStore else { return }
+    guard let settings, let usageTracker, let recognizerStore, let audioInput else { return }
     if settingsWindowController == nil {
       settingsWindowController = SettingsWindowController(
         settings: settings,
@@ -277,7 +277,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         recognizers: recognizerStore,
         usageTracker: usageTracker,
         updater: updaterService,
-        launchAtLogin: launchAtLoginService
+        launchAtLogin: launchAtLoginService,
+        audioInput: audioInput
       )
     }
     settingsWindowController?.show()

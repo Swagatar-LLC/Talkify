@@ -17,6 +17,12 @@ During Direct Dictation, the idle meter releases its engine synchronously **befo
 
 ## Routing and platform constraints
 
+Settings → Dictation hosts the selector, effective-input explanation and live input-level meter. The unavailable saved UID remains a separate selected menu option; it is never replaced by System. Only the UID is persisted, so a device absent since launch is identified by UID rather than a remembered display name. Insertion and History retain a scoped next-session notice during dictation; microphone changes are live.
+
+The retained Settings window explicitly tracks visibility and a presentation generation, so closing and immediately reopening it restarts monitoring even if SwiftUI coalesces the visibility changes. Closing synchronously cancels pending permission and stops only idle monitoring. Returning from System Settings rechecks permission before restarting monitoring. Revoked permission releases idle capture and prevents route changes from restarting it.
+
+`AudioInputSettingsTests` hosts the actual SwiftUI views and window, reads their native accessibility nodes, and selects a device through the native menu using key events. Its inventory, permission reply and capture owner are injected; it never records real audio or prompts for permission. Coverage includes fallback and reconnection rendering, zero/signal/error/unavailable meter states, denied/revoked permission, retained-window close/reopen and synchronous dictation handoff. PNG attachments in the test result show the rendered states.
+
 Core Audio device-list/default-input listeners keep selection current while idle. Capture sets `kAudioOutputUnitProperty_CurrentDevice` on its own input audio unit, never the system-wide default. System is a policy, not a persisted device: the default is reread on hardware events and before every engine open/rebuild. This also closes the race where an engine-configuration notification precedes the Settings model's unplug notification.
 
 Engine startup, recovery, and shutdown run on one serial queue. An effective-route change rebuilds the engine and its converter. Bluetooth profile changes may still fail a session if hardware supplies no usable format; failure ends that capture with an error rather than silently listening to a dead engine. The preference remains saved and the next capture resolves it again. Seamless speech across a hardware outage is not promised.

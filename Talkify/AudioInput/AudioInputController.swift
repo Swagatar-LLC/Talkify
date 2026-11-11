@@ -8,6 +8,7 @@ import Observation
 @Observable
 final class AudioInputController {
   private let settings: AppSettings
+  @ObservationIgnored private let makeLevelMonitor: (AudioInputRoute) -> AudioInputLevelMonitor
   @ObservationIgnored private let requestMicrophoneAccess: @Sendable () async -> Bool
   @ObservationIgnored private var observation: CoreAudioInputObservation?
   @ObservationIgnored private var stopped = false
@@ -25,6 +26,7 @@ final class AudioInputController {
   private(set) var isMonitoring = false
   private(set) var captureError: String?
   private(set) var discoveryError: String?
+  private(set) var isMicrophoneAccessDenied = false
 
   var preferredInputUID: String? { settings.preferredAudioInputUID }
   var effectiveInput: AudioInputDevice? { selection.effectiveInput }
@@ -37,11 +39,13 @@ final class AudioInputController {
   init(
     settings: AppSettings,
     observeHardware: Bool = true,
+    makeLevelMonitor: @escaping (AudioInputRoute) -> AudioInputLevelMonitor = { AudioInputLevelMonitor(route: $0) },
     requestMicrophoneAccess: @escaping @Sendable () async -> Bool = {
       await PermissionService.requestMicrophoneAccess()
     }
   ) {
     self.settings = settings
+    self.makeLevelMonitor = makeLevelMonitor
     self.requestMicrophoneAccess = requestMicrophoneAccess
     if observeHardware {
       route = AudioInputRoute(readHardware: { try CoreAudioInputDevices.snapshot() })
@@ -113,11 +117,13 @@ final class AudioInputController {
     monitoringRequested = true
     let allowed = await requestMicrophoneAccess()
     guard !stopped, monitoringRequested, request == monitoringRequest else { return }
+    isMicrophoneAccessDenied = !allowed
     guard allowed else {
+      stopMonitoring()
       captureError = "Microphone access is denied. Enable it in System Settings."
       return
     }
-    if levelMonitor == nil { levelMonitor = AudioInputLevelMonitor(route: route) }
+    if levelMonitor == nil { levelMonitor = makeLevelMonitor(route) }
     levelMonitor?.start()
   }
 

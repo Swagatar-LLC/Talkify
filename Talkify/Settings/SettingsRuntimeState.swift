@@ -7,6 +7,9 @@ import Observation
 @MainActor
 @Observable
 final class SettingsRuntimeState {
+  var isSettingsVisible = false
+  // A close/reopen in one render pass must still restart the meter task.
+  var settingsPresentation = 0
   var isDictating: Bool
 
   /// Language models currently downloading, as locale identifier to progress

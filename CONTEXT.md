@@ -258,7 +258,7 @@ _Avoid_: Transcript history, cloud analytics
 - The Swagatar fork defaults to System input, following whichever microphone macOS currently selects; an explicit input preference stores the device's persistent Core Audio UID (fork ADR-9001)
 - A missing preferred input falls back to System without changing its saved preference, and reconnecting it restores the preferred route automatically; Settings exposes preferred and effective selection separately
 - Input selection and hardware changes apply without relaunching; a device change during an active session rebuilds capture but may end that session if the hardware cannot supply a usable route
-- The input Settings meter uses an idle level-only capture that yields to Direct Dictation and then reuses its existing levels; closing Settings does not interrupt dictation
+- Settings → Dictation shows a live input-level meter for the effective input, including System fallback, only while that section is visible. Its idle level-only capture yields to Direct Dictation and reuses the session's levels; closing the section or window releases idle capture without interrupting dictation
 - Onboarding requests microphone, speech recognition, and Accessibility permissions
 - **Live Captions** requests system-audio permission only when first used
 - **Direct Dictation** refuses to record for a focused secure password field and shows “Secure field”

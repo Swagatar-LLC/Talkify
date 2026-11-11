@@ -53,7 +53,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     case .general: "Choose how Talkify starts"
     case .appearance: "Customize the Direct Dictation HUD"
     case .sounds: "Choose and preview the session sounds"
-    case .dictation: "Choose where finished dictation text goes"
+    case .dictation: "Choose your microphone and where dictation text goes"
     case .promptShaping: "Rewrite what you dictate, on device"
     case .dropTranscription: "Transcribe audio and video files"
     case .readAloud: "Choose the voice that reads selected text"

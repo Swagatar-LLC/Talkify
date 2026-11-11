@@ -1,17 +1,27 @@
 import AppKit
 import SwiftUI
 
-/// The Dictation section: where a finished Direct Dictation session's text
-/// goes, and whether a copy is kept. Both choices are captured into the
-/// session settings snapshot at session start (CONTEXT.md).
+/// Input routing is live; delivery and history choices are captured into
+/// the Direct Dictation session settings snapshot at session start.
 struct DictationSettingsView: View {
   @Bindable var settings: AppSettings
+  let audioInput: AudioInputController
+  var isDictating = false
 
   private let historyStore = DictationHistoryStore()
   @State private var isConfirmingClear = false
 
   var body: some View {
     VStack(spacing: 16) {
+      AudioInputSettingsView(audioInput: audioInput)
+
+      if isDictating {
+        Text("Insertion and History changes apply to the next Direct Dictation session.")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .frame(maxWidth: .infinity, alignment: .leading)
+      }
+
       SettingsCard(title: "Insertion") {
         SettingsPickerRow(
           title: "Deliver text by",
