@@ -11,10 +11,11 @@ struct CatalogTests {
     #expect(CatalogLint.violations(in: catalog).map(\.description) == [])
   }
 
-  @Test func whisperTurboIsProposedOnSyntheticEvidence() throws {
+  @Test func whisperTurboIsAvailableOnSyntheticEvidence() throws {
     let model = try whisper()
-    #expect(model.status == .proposed)
-    #expect(model.review == nil)
+    #expect(model.status == .available)
+    #expect(model.review?.reviewer == "t_c8121969")
+    #expect(model.review?.secondReviewer == "t_47119487")
     #expect(model.revoked == nil)
     #expect(model.minHardware.minimumSystemVersion == "26.7")
 
@@ -23,6 +24,30 @@ struct CatalogTests {
     #expect(measured.termHits == CatalogModel.Score(hits: 32, of: 36))
     #expect(measured.controlsUnchanged == CatalogModel.Score(hits: 18, of: 18))
     #expect(measured.wer == 0.012)
+  }
+
+  /// ADR-9001's gate, held against the numbers the entry is listed on: at least 10 points
+  /// of terms over Apple's best arm, every control kept, p90 at or under 1.0 s and warm
+  /// memory at or under 400 MiB.
+  @Test func everyAvailableEntryMeetsTheGate() throws {
+    for model in try Catalog.bundled().models where model.status == .available {
+      let measured = try #require(model.measured, "\(model.id)")
+      let terms = Double(measured.termHits.hits) / Double(measured.termHits.of)
+      let apple = Double(measured.appleBaseline.termHits.hits) / Double(measured.appleBaseline.termHits.of)
+      #expect(terms - apple >= 0.10, "\(model.id)")
+      #expect(measured.controlsUnchanged.hits == measured.controlsUnchanged.of, "\(model.id)")
+      #expect(try #require(measured.latencyMillisecondsP90) <= 1_000, "\(model.id)")
+      #expect(try #require(measured.peakRSSMiBWarm) <= 400, "\(model.id)")
+    }
+  }
+
+  /// The design requires the review record to exist, which the pure lint cannot see.
+  @Test func everyAvailableEntrysReviewRecordIsInTheRepository() throws {
+    let repository = URL(filePath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+    for model in try Catalog.bundled().models where model.status == .available {
+      let record = try #require(model.review?.record, "\(model.id)")
+      #expect(FileManager.default.fileExists(atPath: repository.appending(path: record).path), "\(record)")
+    }
   }
 
   @Test func whisperTurboPinsBothRepositoriesFileByFile() throws {
@@ -183,6 +208,7 @@ struct CatalogTests {
   @Test func availableRequiresTwoDistinctReviewers() throws {
     var model = try whisper()
     model.status = .available
+    model.review = nil
     #expect(rules(model) == [.availableNeedsTwoReviewers, .availableNeedsNetworkDenyTest])
 
     model.review = CatalogModel.Review(record: "r.md", networkDenyTest: "pass", reviewer: "alice", secondReviewer: " ")

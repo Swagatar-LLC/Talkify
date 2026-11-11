@@ -4,8 +4,8 @@ import SwiftUI
 /// that state and a client that touches nothing.
 @MainActor
 enum RecognizerPreviewFixtures {
-  /// The bundled Whisper entry, with the status the preview needs. The bundled file lists
-  /// it as proposed until review, so `available` here shows the row Download offers.
+  /// The bundled Whisper entry, with the status the preview needs, so one entry can show
+  /// every state a listed model can be in.
   static func whisper(
     status: CatalogModel.Status = .available,
     revoked: CatalogModel.Revocation? = nil
@@ -97,7 +97,7 @@ private struct RecognizerSheetPreview: View {
   RecognizerPanePreview(store: RecognizerPreviewFixtures.store())
 }
 
-#Preview("Pane · proposed (bundled catalog today)") {
+#Preview("Pane · proposed") {
   RecognizerPanePreview(store: RecognizerPreviewFixtures.store(model: RecognizerPreviewFixtures.whisper(status: .proposed)))
 }
 
