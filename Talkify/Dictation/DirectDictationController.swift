@@ -35,6 +35,7 @@ final class DirectDictationController {
   private var permissionTask: Task<Void, Never>?
   private var permissionWatchTask: Task<Void, Never>?
   private var sessionStartTask: Task<Void, Never>?
+  private var recognitionGeneration: UUID?
   /// The finish in flight, carrying the session's last words to insertion.
   /// Tracked so teardown can wait for it instead of racing it.
   private var finishTask: Task<Void, Never>?
@@ -325,6 +326,7 @@ final class DirectDictationController {
     permissionTask?.cancel()
     permissionWatchTask?.cancel()
     sessionStartTask?.cancel()
+    recognitionGeneration = nil
     // The finish is deliberately not cancelled: it holds the user's last
     // words, and termination has already given it its window through
     // waitForFinish.
@@ -536,14 +538,17 @@ final class DirectDictationController {
     case .beginRecognition:
       beginRecognition()
     case let .finishRecognition(speakingDuration):
+      recognitionGeneration = nil
       finishRecognition(speakingDuration: speakingDuration)
     case .cancelRecognition:
+      recognitionGeneration = nil
       Task { [weak self] in
         guard let self else { return }
         await dependencies.cancelRecognition()
         send(.sessionEnded)
       }
     case .cancelStartTask:
+      recognitionGeneration = nil
       sessionStartTask?.cancel()
     case let .setEscapeCapture(enabled):
       keyEventMonitor?.setEscapeCaptureEnabled(enabled)
@@ -659,6 +664,8 @@ final class DirectDictationController {
       "session began on \(String(describing: self.activeSlot), privacy: .public) in \(locale.identifier, privacy: .public)"
     )
 
+    let generation = UUID()
+    recognitionGeneration = generation
     sessionStartTask = Task { [weak self] in
       guard let self else { return }
       do {
@@ -666,17 +673,20 @@ final class DirectDictationController {
           locale,
           { [weak self] update in
             Task { @MainActor [weak self] in
-              self?.receive(update)
+              guard let self, recognitionGeneration == generation else { return }
+              receive(update)
             }
           },
           { [weak self] message in
             Task { @MainActor [weak self] in
-              self?.fail(message: message, wasCancelled: false)
+              guard let self, recognitionGeneration == generation else { return }
+              fail(message: message, wasCancelled: false)
             }
           },
           { [weak self] level in
             Task { @MainActor [weak self] in
-              self?.dependencies.showAudioLevel(level)
+              guard let self, recognitionGeneration == generation else { return }
+              dependencies.showAudioLevel(level)
             }
           }
         )

@@ -8,6 +8,7 @@ final class MicrophoneInput: @unchecked Sendable {
   enum InputError: LocalizedError, Sendable {
     case unavailable
     case permissionDenied
+    case noFirstBuffer
     case routingFailed(OSStatus)
     case converterCreationFailed
     case conversionFailed(String)
@@ -19,6 +20,8 @@ final class MicrophoneInput: @unchecked Sendable {
         "No microphone input is available."
       case .permissionDenied:
         "Microphone access is denied. Enable it in System Settings."
+      case .noFirstBuffer:
+        "The microphone started but supplied no audio. Check the microphone or choose another input."
       case let .routingFailed(status):
         "The selected microphone could not be opened (\(status))."
       case .converterCreationFailed:
@@ -28,6 +31,31 @@ final class MicrophoneInput: @unchecked Sendable {
       case .analyzerBackpressure:
         "Speech analysis could not keep up with microphone input."
       }
+    }
+  }
+
+  /// A tap can start successfully without ever calling back. Each replacement
+  /// owns its deadline, even when capture has no AudioInputRoute.
+  struct StartupDeadline {
+    private(set) var generation: UInt64 = 0
+    private var awaitingBuffer = false
+
+    mutating func begin() -> UInt64 {
+      generation += 1
+      awaitingBuffer = true
+      return generation
+    }
+
+    mutating func receive(frameCount: AVAudioFrameCount, generation: UInt64) {
+      if self.generation == generation, frameCount > 0 { awaitingBuffer = false }
+    }
+
+    mutating func cancel() { awaitingBuffer = false }
+
+    mutating func expire(generation: UInt64) -> Bool {
+      guard self.generation == generation, awaitingBuffer else { return false }
+      awaitingBuffer = false
+      return true
     }
   }
 
@@ -108,6 +136,7 @@ final class MicrophoneInput: @unchecked Sendable {
   private var running = false
   private var reportedFailure = false
   private var captureGeneration: UInt64?
+  private var startupDeadline = StartupDeadline()
 
   init(
     feed: (@Sendable (AVAudioPCMBuffer) -> Bool)? = nil,
@@ -132,6 +161,7 @@ final class MicrophoneInput: @unchecked Sendable {
     stateLock.withLock {
       analyzerFormat = outputFormat
       running = true
+      reportedFailure = false
     }
     if let route {
       routeObserver = NotificationCenter.default.addObserver(
@@ -141,7 +171,10 @@ final class MicrophoneInput: @unchecked Sendable {
     do {
       try startCapturing(on: audioEngine, into: outputFormat)
     } catch {
-      stateLock.withLock { running = false }
+      stateLock.withLock {
+        running = false
+        startupDeadline.cancel()
+      }
       stopObservingConfigurationChanges()
       stopObservingRouteChanges()
       audioEngine.stop()
@@ -157,12 +190,14 @@ final class MicrophoneInput: @unchecked Sendable {
     )
   }
 
-  /// Explicit device binding leaves the node's output format cached from the
-  /// OS default. A routed tap must use the hardware input format instead, or
-  /// switching between 24 kHz Bluetooth and 48 kHz built-in fails with -10868.
+  /// A format snapshot can be stale before tap installation. Leave negotiation
+  /// to the node; conversion follows the format of each delivered buffer.
   private func startCapturing(on engine: AVAudioEngine, into outputFormat: AVAudioFormat) throws {
     let generation = route?.beginCapture()
-    stateLock.withLock { captureGeneration = generation }
+    let startupGeneration = stateLock.withLock {
+      captureGeneration = generation
+      return startupDeadline.begin()
+    }
     let authorization = AVCaptureDevice.authorizationStatus(for: .audio)
     guard authorization != .denied, authorization != .restricted else {
       throw InputError.permissionDenied
@@ -187,8 +222,9 @@ final class MicrophoneInput: @unchecked Sendable {
     inputNode.removeTap(onBus: 0)
 
     let converterBox = ConverterBox(outputFormat: outputFormat)
-    inputNode.installTap(onBus: 0, bufferSize: 1_024, format: route == nil ? nil : hardwareFormat) { [weak self] buffer, _ in
-      self?.receive(buffer, converterBox: converterBox, generation: generation)
+    try Self.installTap(on: inputNode) { [weak self] buffer, _ in
+      self?.receive(buffer, converterBox: converterBox, generation: generation,
+        startupGeneration: startupGeneration)
     }
 
     engine.prepare()
@@ -199,6 +235,18 @@ final class MicrophoneInput: @unchecked Sendable {
       throw error
     }
     route?.publish(.started, generation: generation)
+    // This is a failure deadline, not a retry or a Bluetooth settling delay.
+    // Synchronous engine startup does not consume the post-start allowance.
+    recoveryQueue.asyncAfter(deadline: .now() + 10) { [weak self] in
+      guard let self else { return }
+      if let generation, route?.generation != generation { return }
+      let expired = stateLock.withLock {
+        running && startupDeadline.expire(generation: startupGeneration)
+      }
+      if expired {
+        reportFailure(.noFirstBuffer, generation: generation, startupGeneration: startupGeneration)
+      }
+    }
   }
 
   private func observeConfigurationChanges(of engine: AVAudioEngine) {
@@ -294,6 +342,18 @@ final class MicrophoneInput: @unchecked Sendable {
     }
   }
 
+  static func installTap(on node: AVAudioNode, block: @escaping AVAudioNodeTapBlock) throws {
+    // macOS 27 reports native tap rejection as NSError. The legacy overload
+    // raises an Objective-C exception, which Swift catch cannot contain.
+    #if compiler(>=6.4)
+    if #available(macOS 27.0, *) {
+      try node.__installTap(onBus: 0, bufferSize: 1_024, format: nil, error: (), block: block)
+      return
+    }
+    #endif
+    node.installTap(onBus: 0, bufferSize: 1_024, format: nil, block: block)
+  }
+
   static func hasUsableHardwareInput(_ format: AVAudioFormat) -> Bool {
     format.channelCount > 0 && format.sampleRate > 0
   }
@@ -308,6 +368,7 @@ final class MicrophoneInput: @unchecked Sendable {
     let shouldStop = stateLock.withLock { () -> Bool in
       guard running else { return false }
       running = false
+      startupDeadline.cancel()
       return true
     }
 
@@ -328,19 +389,27 @@ final class MicrophoneInput: @unchecked Sendable {
     if feed != nil, running { route?.setDictationActive(false) }
   }
 
-  private func receive(_ buffer: AVAudioPCMBuffer, converterBox: ConverterBox, generation: UInt64?) {
+  private func receive(_ buffer: AVAudioPCMBuffer, converterBox: ConverterBox, generation: UInt64?,
+    startupGeneration: UInt64) {
     if let generation, route?.generation != generation { return }
+    let acceptsBuffer = stateLock.withLock {
+      guard running, !reportedFailure, startupDeadline.generation == startupGeneration else { return false }
+      startupDeadline.receive(frameCount: buffer.frameLength, generation: startupGeneration)
+      return true
+    }
+    guard acceptsBuffer else { return }
     publishLevel(of: buffer, generation: generation)
     guard let feed, !stateLock.withLock({ reportedFailure }) else { return }
     do {
       let convertedBuffer = try convert(buffer, using: converterBox)
       if !feed(convertedBuffer) {
-        reportFailure(.analyzerBackpressure, generation: generation)
+        reportFailure(.analyzerBackpressure, generation: generation, startupGeneration: startupGeneration)
       }
     } catch let error as InputError {
-      reportFailure(error, generation: generation)
+      reportFailure(error, generation: generation, startupGeneration: startupGeneration)
     } catch {
-      reportFailure(.conversionFailed(error.localizedDescription), generation: generation)
+      reportFailure(.conversionFailed(error.localizedDescription), generation: generation,
+        startupGeneration: startupGeneration)
     }
   }
 
@@ -397,15 +466,18 @@ final class MicrophoneInput: @unchecked Sendable {
     route?.publish(.level(level), generation: generation)
   }
 
-  private func reportFailure(_ error: InputError, generation: UInt64? = nil) {
+  private func reportFailure(_ error: InputError, generation: UInt64? = nil,
+    startupGeneration: UInt64? = nil) {
     // A retiring tap can finish conversion after its replacement has started.
     // Validate and terminate on the same queue that opens replacement engines.
     recoveryQueue.async { [weak self] in
       guard let self else { return }
       if let generation, route?.generation != generation { return }
       let shouldReport = stateLock.withLock { () -> Bool in
-        guard !reportedFailure else { return false }
+        guard running, !reportedFailure,
+          startupGeneration == nil || startupGeneration == startupDeadline.generation else { return false }
         reportedFailure = true
+        startupDeadline.cancel()
         return true
       }
 

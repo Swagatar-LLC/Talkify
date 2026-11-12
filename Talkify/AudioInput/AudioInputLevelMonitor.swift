@@ -19,7 +19,10 @@ final class AudioInputLevelMonitor: @unchecked Sendable {
   ) -> any AudioInputCapturing
   private let queue = DispatchQueue(label: "com.tgomareli.Talkify.input-meter")
   private var observers: [any NSObjectProtocol] = []
+  private let requestLock = NSLock()
   private var requested = false
+  private var requestGeneration: UInt64 = 0
+  private var restartRequested = false
   private var capture: (any AudioInputCapturing)?
   private var captureID: UUID?
 
@@ -39,27 +42,55 @@ final class AudioInputLevelMonitor: @unchecked Sendable {
       ) { [weak self] notification in
         let restart = notification.name == AudioInputRoute.didChange
         guard let self else { return }
-        queue.sync { reconcile(restart: restart) }
+        // Only Direct Dictation's lease waits for release, on its recognizer
+        // executor. Settings and route notifications must never wait for HAL.
+        request(restart: restart, synchronous: !restart && route.isDictationActive)
       }
       observers.append(observer)
     }
   }
 
   func start() {
-    queue.sync {
-      requested = true
-      reconcile(restart: false)
-    }
+    request(monitoring: true)
   }
 
   func stop() {
-    queue.sync {
-      requested = false
-      reconcile(restart: false)
+    request(monitoring: false)
+  }
+
+  private func request(monitoring: Bool? = nil, restart: Bool = false, synchronous: Bool = false) {
+    let generation = requestLock.withLock { () -> UInt64? in
+      // Repeated Settings presentations must not retire a startup already in
+      // flight. Notifications still reconcile, and a lease always drains work.
+      if let monitoring, requested == monitoring, !restart, !synchronous { return nil }
+      if let monitoring { requested = monitoring }
+      requestGeneration += 1
+      restartRequested = restartRequested || restart
+      return requestGeneration
+    }
+    guard let generation else { return }
+    let work: @Sendable () -> Void = { [self] in
+      let state = requestLock.withLock { () -> (requested: Bool, restart: Bool)? in
+        guard generation == requestGeneration else { return nil }
+        defer { restartRequested = false }
+        return (requested, restartRequested)
+      }
+      guard let state else { return }
+      reconcile(requested: state.requested, restart: state.restart, generation: generation)
+    }
+    if synchronous {
+      // This barrier must release even if another UI request supersedes it.
+      queue.sync {
+        capture?.stop()
+        capture = nil
+        captureID = nil
+      }
+    } else {
+      queue.async(execute: work)
     }
   }
 
-  private func reconcile(restart: Bool) {
+  private func reconcile(requested: Bool, restart: Bool, generation: UInt64) {
     let shouldCapture = requested && !route.isDictationActive
     if capture != nil, shouldCapture, !restart { return }
     capture?.stop()
@@ -82,6 +113,13 @@ final class AudioInputLevelMonitor: @unchecked Sendable {
       // A level-only capture does not resample or feed a SpeechAnalyzer.
       guard let format = AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1) else { return }
       try input.start(outputFormat: format)
+      // stop/route requests can arrive while a driver blocks in start. Retire
+      // that capture before any queued request can claim a replacement.
+      if requestLock.withLock({ generation != requestGeneration }) || route.isDictationActive {
+        input.stop()
+        capture = nil
+        captureID = nil
+      }
     } catch {
       capture = nil
       captureID = nil

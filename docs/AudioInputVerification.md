@@ -4,6 +4,79 @@ Verified locally on 2026-11-11: MacBook Pro (Mac16,5), arm64, macOS 27.2.1 (26B1
 
 ## Integration onto Catalog Models main
 
+### Tap rejection and nonblocking Settings startup (2026-11-12)
+
+The preserved attended crash aborted during activation-driven idle-meter restart:
+AVFAudio rejected a 48 kHz client tap against 24 kHz hardware. The earlier
+explicit-format workaround is superseded, not validated by its historical passes.
+Capture now installs a nil-format tap and converts each delivered buffer's format.
+On macOS 27 with Xcode 27, the native NSError-returning overload reports tap
+rejection instead of raising the legacy Objective-C exception. A disconnected-mixer
+regression actually aborted with the old overload and passes with the correction;
+it does not simulate a physical Bluetooth transition.
+
+The opt-in `scripts/verify-audio-input-tap.py` compiles production sources with
+readback-only diagnostics. Its explicitly labelled stale-snapshot injection failed
+on the old source with zero audio at the 30-second bound, then passed all three
+one-second checkpoints on the corrected source. Uninjected built-in and Yeti USB
+runs matched requested/bound IDs on all three starts; each delivered ten Recognizer
+buffers, 26 real-level snapshots and zero errors. All PCM was discarded. AirPods
+were absent from the current inventory, so connected-playback isolation, acoustic
+identity and the original Bluetooth transition remain unverified.
+
+Settings start/stop/route requests now enqueue hardware work rather than block the
+main thread. The dictation lease still synchronously releases the idle owner before
+opening another. Semaphore-controlled regressions fail on the old blocking path
+and pass after correction, including close-during-start, identical-request
+coalescing and single-owner handoff. Queued recognition updates, failures and HUD
+levels now reject retired session UUIDs after their MainActor hop. Red logs and
+prior failures remain under `.verification`; current final suite/merge evidence is
+recorded in `.verification/merge-handoff.md`.
+
+### Bounded diagnostics and startup failure handling (2026-11-11)
+
+The tracked probe now preserves one-second checkpoints for initial idle capture,
+initial dictation, every policy switch and idle resumption, then observes the same
+process for up to 30 seconds after the synchronous operation returns. It records
+first-buffer and real-level timing; `.started` is not counted as audio.
+
+The first baseline and production processes completed all 12 phases, but their
+timing labels are provisional: independent review reproduced observer scheduling
+that incorrectly counted post-deadline samples. Those logs lack every sample's
+timestamp, so their exact checkpoint classifications cannot be recovered.
+
+After correcting timestamp membership, eight deterministic observer cases passed.
+One new production-source live run completed all 12 phases: four timely, eight
+failed one-second checkpoints followed by same-process recovery, including late
+idle resumption. It recorded 54 Recognizer buffers and 67 real-level snapshots,
+with no persistent stall or reported error. Exact offsets remain in
+`.verification/timing-live-production.log`. These observations do not explain all
+earlier intermittent failures or prove a Bluetooth fix.
+
+Production now reports an explicit no-first-buffer failure if a tap delivers no
+nonempty buffer within ten seconds after engine startup returns. It does not
+retry, bound synchronous Core Audio calls, or detect a stall after audio has
+already arrived. Deadline state rejects retired generations and cancellation;
+Direct Dictation also rejects failure callbacks from older sessions. Settings
+retains the error, and dictation cancels without inserting text. Both Recognizers
+still use the unchanged shared RecognizerFeed capture API.
+
+Regression evidence includes three failing startup-policy tests before expiration
+was implemented, and a separate failing controller test showing an old failure
+could cancel a newer session. The final Debug build and corpus harness build
+passed. The full macOS suite passed: 623 distinct cases, 614 passed, nine skipped,
+zero failed (717 passing parameterized executions at device level). An earlier
+focused run failed the existing native-picker test; that failure is retained and
+not claimed fixed. Commands and all logs are in
+`.verification/software-followup-report.md`.
+
+Jeff's confirmed AirPods Sound VU answers hardware readiness for this investigation.
+No physical reconnect was requested or performed. Acoustic identity, physical
+outage recovery, spoken recognition/insertion and macOS 26 runtime behavior remain
+unverified. The live no-callback state did not recur in the bounded runs;
+the new failure path has deterministic policy/propagation coverage, not a fresh
+hardware-triggered timeout demonstration. Product acceptance remains open.
+
 ### Restoration follow-up (2026-11-11)
 
 The original three-phase switching probe reproduced the final built-in reopening
@@ -25,11 +98,10 @@ The final Debug build and full suite passed (607 passed, nine skipped, zero fail
 Exact commands, failed and successful logs, diagnostic controls and the local
 revision are recorded in `.verification/restoration-report.md`.
 
-Jeff must confirm the headset is ready to supply microphone audio, and, if needed,
-reconnect it during an attended check before rerunning the production probe three
-times. No physical connection, permission or system audio setting was changed to
-force a green result. A production first-buffer timeout is still absent; the
-probe's deadline is a test deadline, not an implemented recovery guarantee.
+At that earlier checkpoint, readiness confirmation was requested and a production
+first-buffer timeout was absent. The software follow-up above supersedes both
+statuses. No physical connection, permission or system audio setting was changed
+to force a green result; a probe deadline is not a recovery guarantee.
 
 ### Earlier integration evidence
 
@@ -62,7 +134,7 @@ Before integration onto Catalog Models, the feature branch's Debug build and ful
 
 1. Recovery could open System before inventory delivery, then miss a quick reconnect because its cached route still named the preferred device. The new regression failed before the fix and passed afterward. Capture now remembers its live-resolved device.
 2. A new device label could display levels queued by the old input. The regression failed before the fix. Route/tap generations now invalidate those snapshots and late callbacks, and selection immediately clears the meter. Terminal failure handling is serialized with replacement-engine startup.
-3. A real AirPods (24 kHz) to built-in (48 kHz) switch failed with an audio-engine format mismatch. Routed taps now use hardware input format rather than the output format cached from System. The production-source probe subsequently passed selection, fallback and return with real buffers. Bluetooth teardown/recovery exceeded one second; the probe waits up to 30 seconds.
+3. A real AirPods (24 kHz) to built-in (48 kHz) switch originally failed with an audio-engine format mismatch. The earlier explicit hardware-format tap workaround passed a bounded probe but later caused the attended AVFAudio abort described above. It is superseded by nil-format tap negotiation; this history is not evidence of seamless Bluetooth recovery.
 4. The old probe supplied Float32 PCM to AnalyzerInput, which traps on this macOS release. A standalone nonempty-buffer reproduction confirmed the framework failure; integer PCM succeeds. Production dictation obtains its format from SpeechAnalyzer and was not changed for this probe defect.
 
 An initial full-suite run also exposed an overstrict permission-request count: application activation can legitimately recheck permission. The test now checks capture ownership exactly and permits extra permission rechecks.
@@ -85,4 +157,4 @@ Use a separate macOS test account or isolated test bundle; do not reset the inst
 
 ## Acceptance limits
 
-No seamless speech is promised across a hardware outage. Explicit tap installation still has a hardware-format read/install window: a physical format change there may raise an Objective-C framework exception, which Swift cannot catch. An attended hot-plug/profile test is a release gate, not a passing result inferred from inventory injection. The current implementation does not impose a production recovery timeout, so Bluetooth transitions can take several seconds. Device UID identity remains driver-controlled. macOS 26 deployment compatibility compiled, but this run only exercised macOS 27.2.1.
+No seamless speech is promised across a hardware outage. Capture no longer passes a sampled hardware format to tap installation. An Xcode 27 / Swift 6.4 build on macOS 27 uses AVFAudio's NSError-returning tap API, with native rejection tested without process abort. macOS 26, or a build using an older SDK, retains the legacy nil-format API; blanket exception containment there is **not verified**. The attended AirPods transition itself has not been repeated after the correction. An attended hot-plug/profile test remains a release gate, not a passing result inferred from inventory injection. The first-buffer deadline starts only after synchronous engine startup returns; it does not bound synchronous recovery or monitor gaps after the first buffer. Settings requests no longer wait on that startup, but a blocked driver can still delay the background dictation ownership handoff. Device UID identity remains driver-controlled. This soak preparation targets macOS 27.2.1; macOS 26 runtime acceptance remains open.

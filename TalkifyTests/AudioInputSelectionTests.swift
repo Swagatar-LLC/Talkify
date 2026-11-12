@@ -101,6 +101,48 @@ struct AudioInputSelectionTests {
     #expect(controller.captureError == nil)
   }
 
+  @Test(arguments: ["built-in", "usb"])
+  func availableSavedInputWinsOverBluetoothDefaultAcrossControllerAndMeterLifecycle(preferred: String) async throws {
+    let name = "AudioInputStablePreferenceTests-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: name))
+    defer { defaults.removePersistentDomain(forName: name) }
+    let builtIn = AudioInputDevice(id: "built-in", name: "Built-in", deviceID: 1)
+    let usb = AudioInputDevice(id: "usb", name: "USB", deviceID: 2)
+    let bluetooth = AudioInputDevice(id: "bluetooth", name: "AirPods (injected inventory)", deviceID: 3)
+    let inventory = [builtIn, usb, bluetooth]
+    let expected = try #require(inventory.first { $0.id == preferred })
+    defaults.set(preferred, forKey: "preferredAudioInputUID")
+    for _ in 0..<2 {
+      let capture = AudioInputLevelMonitorTests.Capture()
+      let controller = AudioInputController(settings: AppSettings(defaults: defaults), observeHardware: false,
+        makeLevelMonitor: { route in AudioInputLevelMonitor(route: route, makeCapture: { _, _ in capture }) },
+        requestMicrophoneAccess: { true })
+      controller.updateInventory(devices: inventory, defaultDeviceID: bluetooth.deviceID)
+      #expect(controller.effectiveInput == expected)
+      #expect(try controller.route.deviceIDForCapture() == expected.deviceID)
+      await controller.startMonitoring()
+      #expect(capture.waitForStarts(1))
+      controller.updateInventory(devices: inventory, defaultDeviceID: builtIn.deviceID)
+      #expect(controller.effectiveInput == expected)
+      // Same activation boundary as Settings, without changing this Mac's route.
+      controller.stopMonitoring()
+      await controller.startMonitoring()
+      controller.route.setDictationActive(true)
+      #expect(capture.counts.stops == capture.counts.starts, "dictation takes a released owner")
+      let beforeResume = capture.counts.starts
+      controller.route.setDictationActive(false)
+      #expect(capture.waitForStarts(beforeResume + 1))
+      #expect(controller.route.deviceID == expected.deviceID)
+      #expect(defaults.string(forKey: "preferredAudioInputUID") == preferred)
+      controller.stop()
+    }
+    let absent = AudioInputController(settings: AppSettings(defaults: defaults), observeHardware: false)
+    defer { absent.stop() }
+    absent.updateInventory(devices: [bluetooth], defaultDeviceID: bluetooth.deviceID)
+    #expect(absent.effectiveInput == bluetooth, "missing USB/built-in retains System fallback policy")
+    #expect(defaults.string(forKey: "preferredAudioInputUID") == preferred)
+  }
+
   @Test func restartingWhileDisconnectedRetainsThePreferenceThroughDefaultChangesAndRestoration() throws {
     let name = "AudioInputRestartTests-\(UUID().uuidString)"
     let defaults = try #require(UserDefaults(suiteName: name))

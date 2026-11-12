@@ -86,6 +86,10 @@ struct DirectDictationControllerTests {
       = { text, _ in text },
     appliedVocabulary: OSAllocatedUnfairLock<[String]> = .init(initialState: []),
     recognition: RecognizerFeed? = nil,
+    retainedUpdates: OSAllocatedUnfairLock<[@Sendable (SpeechRecognitionService.Update) -> Void]>
+      = .init(initialState: []),
+    retainedLevels: OSAllocatedUnfairLock<[@Sendable (Float) -> Void]>
+      = .init(initialState: []),
     insertOutcome: TextInsertionService.InsertionOutcome = .inserted
   ) -> DirectDictationController.Dependencies {
     DirectDictationController.Dependencies(
@@ -101,6 +105,8 @@ struct DirectDictationControllerTests {
       prepareRecognizer: {},
       startRecognition: { locale, updateHandler, failureHandler, levelHandler in
         startEntries.withLock { $0 += 1 }
+        retainedUpdates.withLock { $0.append(updateHandler) }
+        retainedLevels.withLock { $0.append(levelHandler) }
         try await startRecognitionBody?(locale)
         try await recognition?.start(
           locale: locale,
@@ -176,7 +182,7 @@ struct DirectDictationControllerTests {
         recorder.messages.append(message)
       },
       showModelDownload: { _ in },
-      showAudioLevel: { _ in },
+      showAudioLevel: { _ in recorder.events.append("showAudioLevel") },
       hideHUD: { recorder.events.append("hideHUD") },
       playPasteSound: { recorder.events.append("playPasteSound") },
       setShapingCycleCaptureEnabled: { enabled in
@@ -1736,6 +1742,123 @@ struct DirectDictationControllerTests {
     #expect(!fake.entries.contains("finish"))
     #expect(recorder.insertedTexts.isEmpty)
     controller.stop()
+  }
+
+  @Test func noFirstBufferFailureStopsCaptureAndShowsItsReasonWithoutInsertion() async {
+    let recorder = Recorder()
+    let prewarmed = OSAllocatedUnfairLock(initialState: false)
+    let fake = FakeRecognizer()
+    let failure = OSAllocatedUnfairLock<(@Sendable (String) -> Void)?>(initialState: nil)
+    let capture = fake.capture(buffers: 0)
+    let controller = makeController(dependencies: makeDependencies(
+      recorder: recorder, prewarmed: prewarmed,
+      recognition: RecognizerFeed(recognizer: fake, startCapture: { format, feed, handler, level in
+        failure.withLock { $0 = handler }
+        return try capture(format, feed, handler, level)
+      })
+    ))
+    await prepare(controller, prewarmed: prewarmed)
+    controller.toggleFromMenu()
+    await waitUntil("Session never reached recording") {
+      controller.sessionStateForTesting == .recording(.latched)
+    }
+    let message = MicrophoneInput.InputError.noFirstBuffer.localizedDescription
+    failure.withLock { $0 }?(message)
+    // The Recognizer records cancellation before its async call returns; the
+    // controller shows the reason only after that return and the session reset.
+    await waitUntil("The stalled capture failure was not shown") {
+      recorder.messages.contains(message) && controller.sessionStateForTesting == .idle
+    }
+    #expect(recorder.messages.contains(message))
+    #expect(Array(fake.entries.suffix(2)) == ["stopCapture", "cancel"])
+    #expect(recorder.insertedTexts.isEmpty)
+    #expect(!fake.entries.contains("finish"))
+    controller.stop()
+  }
+
+  @Test func aRetiredCaptureFailureCannotCancelTheNextSession() async {
+    let recorder = Recorder()
+    let prewarmed = OSAllocatedUnfairLock(initialState: false)
+    let fake = FakeRecognizer()
+    let failures = OSAllocatedUnfairLock<[@Sendable (String) -> Void]>(initialState: [])
+    let capture = fake.capture(buffers: 0)
+    let controller = makeController(dependencies: makeDependencies(
+      recorder: recorder, prewarmed: prewarmed,
+      recognition: RecognizerFeed(recognizer: fake, startCapture: { format, feed, handler, level in
+        failures.withLock { $0.append(handler) }
+        return try capture(format, feed, handler, level)
+      })
+    ))
+    await prepare(controller, prewarmed: prewarmed)
+    controller.toggleFromMenu()
+    await waitUntil("First session never reached recording") {
+      controller.sessionStateForTesting == .recording(.latched)
+    }
+    controller.handle(.cancelPressed)
+    await waitUntil("First session did not cancel") { controller.sessionStateForTesting == .idle }
+    controller.toggleFromMenu()
+    await waitUntil("Second session never reached recording") {
+      controller.sessionStateForTesting == .recording(.latched)
+    }
+    failures.withLock { $0.first }?(MicrophoneInput.InputError.noFirstBuffer.localizedDescription)
+    for _ in 0..<30 { await Task.yield() }
+    #expect(controller.sessionStateForTesting == .recording(.latched))
+    #expect(recorder.messages.isEmpty)
+    controller.handle(.cancelPressed)
+    await waitUntil("Second session did not cancel") { controller.sessionStateForTesting == .idle }
+    controller.stop()
+  }
+
+  @Test(arguments: [false, true])
+  func retiredRecognitionCallbacksCannotReachTheHUD(isLevel: Bool) async throws {
+    let recorder = Recorder()
+    let prewarmed = OSAllocatedUnfairLock(initialState: false)
+    let updates = OSAllocatedUnfairLock<[@Sendable (SpeechRecognitionService.Update) -> Void]>(
+      initialState: []
+    )
+    let levels = OSAllocatedUnfairLock<[@Sendable (Float) -> Void]>(initialState: [])
+    let controller = makeController(dependencies: makeDependencies(
+      recorder: recorder, prewarmed: prewarmed,
+      retainedUpdates: updates, retainedLevels: levels
+    ))
+    await prepare(controller, prewarmed: prewarmed)
+    controller.toggleFromMenu()
+    await waitUntil("First session never reached recording") {
+      controller.sessionStateForTesting == .recording(.latched)
+    }
+    controller.handle(.cancelPressed)
+    await waitUntil("First session did not cancel") { controller.sessionStateForTesting == .idle }
+    controller.toggleFromMenu()
+    await waitUntil("Second session never reached recording") {
+      controller.sessionStateForTesting == .recording(.latched)
+    }
+    let event = isLevel ? "showAudioLevel" : "showLiveText"
+    let handlers = updates.withLock { $0 }
+    let levelHandlers = levels.withLock { $0 }
+    #expect(handlers.count == 2)
+    #expect(levelHandlers.count == 2)
+    let oldUpdate = try #require(handlers.first)
+    let currentUpdate = try #require(handlers.last)
+    let oldLevel = try #require(levelHandlers.first)
+    let currentLevel = try #require(levelHandlers.last)
+    let update = SpeechRecognitionService.Update(finalizedText: "old words", volatileText: "")
+
+    if isLevel { oldLevel(0.8) } else { oldUpdate(update) }
+    // A same-priority main-actor job queued behind the callbacks drains their
+    // synchronous HUD hops without relying on a sleep or repeated yields.
+    await Task { @MainActor in }.value
+    #expect(recorder.count(of: event) == 0)
+
+    if isLevel { currentLevel(0.4) } else { currentUpdate(update) }
+    await Task { @MainActor in }.value
+    #expect(recorder.count(of: event) == 1)
+
+    // Retire while the hop is queued, not before invoking the callback: a
+    // guard outside the main-actor task would still admit this delivery.
+    if isLevel { currentLevel(0.9) } else { currentUpdate(update) }
+    controller.stop()
+    await Task { @MainActor in }.value
+    #expect(recorder.count(of: event) == 1)
   }
 
   /// A microphone that will not start fails the session with its reason, and

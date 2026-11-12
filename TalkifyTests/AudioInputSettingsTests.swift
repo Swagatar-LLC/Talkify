@@ -61,6 +61,23 @@ struct AudioInputSettingsTests {
     #expect(pickerValue(harness.window) == "Unavailable input (usb)")
   }
 
+  @Test func noFirstBufferFailureRemainsExplicitAfterCaptureStops() async throws {
+    let harness = Harness()
+    defer { harness.close() }
+    harness.audio.updateInventory(devices: [system], defaultDeviceID: 1)
+    harness.audio.route.setDictationActive(true)
+    let generation = harness.audio.route.beginCapture()
+    harness.audio.route.publish(.started, generation: generation)
+    let message = MicrophoneInput.InputError.noFirstBuffer.localizedDescription
+    harness.audio.route.publish(.failed(message), generation: generation)
+    harness.audio.route.publish(.stopped, generation: generation)
+    try await settle()
+    #expect(meterValue(harness.window) == message)
+    #expect(!harness.audio.isMonitoring)
+    #expect(harness.audio.level == 0)
+    #expect(harness.audio.captureError == message)
+  }
+
   @Test func deniedMicrophonePermissionExplainsHowToEnableIt() async throws {
     let harness = Harness()
     defer { harness.close() }
@@ -157,6 +174,7 @@ struct AudioInputSettingsTests {
     press(dictation)
     try await settle()
     #expect(await requests.count == 1)
+    #expect(capture.waitForStarts(1))
     #expect(capture.counts.starts == 1)
     harness.runtime.isDictating = true
     try await settle()
@@ -183,12 +201,14 @@ struct AudioInputSettingsTests {
       #expect(capture.counts.starts == 1, "repeated presentations cannot interrupt dictation")
     }
     harness.audio.route.setDictationActive(false)
+    #expect(capture.waitForStarts(2))
     #expect(capture.counts.starts == 2, "visible Settings resumes idle capture")
     let sounds = try #require(descendants(harness.window.contentView as Any).first {
       value($0, "accessibilityLabel") as? String == "Sounds"
     })
     press(sounds)
     try await settle()
+    #expect(capture.waitForStops(2))
     #expect(capture.counts.stops == 2, "leaving Dictation releases idle capture")
     harness.audio.route.setDictationActive(false)
     harness.audio.route.publish(.stopped)
@@ -209,11 +229,13 @@ struct AudioInputSettingsTests {
     })
     press(dictation)
     try await settle()
+    #expect(capture.waitForStarts(1))
     #expect(capture.counts.starts == 1)
     await requests.deny()
     NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApp)
     try await settle()
     #expect(harness.audio.isMicrophoneAccessDenied)
+    #expect(capture.waitForStops(capture.counts.starts))
     let counts = capture.counts
     #expect(counts.stops == counts.starts, "revoking permission must release idle capture")
     harness.audio.updateInventory(devices: [system], defaultDeviceID: 1)
