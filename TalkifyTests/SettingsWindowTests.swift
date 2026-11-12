@@ -16,7 +16,8 @@ struct SettingsWindowTests {
           .appending(path: "TalkifySettingsWindowTests-" + UUID().uuidString + ".json")
       )),
       updater: SparkleUpdaterService(),
-      launchAtLogin: LaunchAtLoginService()
+      launchAtLogin: LaunchAtLoginService(),
+      audioInput: AudioInputController(settings: settings, observeHardware: false)
     )
     let window = try #require(controller.window)
     #expect(window.title == "Talkify Settings")

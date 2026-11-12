@@ -4,6 +4,7 @@ import AppKit
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
   private var settings: AppSettings?
+  private var audioInput: AudioInputController?
   private var statusItemController: StatusItemController?
   private var hudStage: HUDStage?
   private var hudController: DictationHUDController?
@@ -54,6 +55,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     self.settings = settings
     let recognizerStore = RecognizerStore.live(settings: settings)
     self.recognizerStore = recognizerStore
+    let audioInput = AudioInputController(settings: settings)
+    self.audioInput = audioInput
     // One shape, two features. The stage owns the window and hands it out;
     // each feature's HUD controller only decides what its surface says.
     let stage = HUDStage(settings: settings)
@@ -69,7 +72,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       hudController: hudController,
       usageTracker: usageTracker,
       textInsertionService: textInsertionService,
-      recognizerStore: recognizerStore
+      recognizerStore: recognizerStore,
+      audioInput: audioInput
     )
     self.hudController = hudController
     self.dictationController = dictationController
@@ -257,13 +261,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   func applicationWillTerminate(_ notification: Notification) {
     dictationController?.stop()
+    audioInput?.stop()
     // A transcript the HUD is still offering only exists in its staging folder,
     // so quitting writes it out rather than losing it.
     dropTranscriptionController?.commitOfferedTranscript()
   }
 
   private func showSettings() {
-    guard let settings, let usageTracker, let recognizerStore else { return }
+    guard let settings, let usageTracker, let recognizerStore, let audioInput else { return }
     if settingsWindowController == nil {
       settingsWindowController = SettingsWindowController(
         settings: settings,
@@ -272,7 +277,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         recognizers: recognizerStore,
         usageTracker: usageTracker,
         updater: updaterService,
-        launchAtLogin: launchAtLoginService
+        launchAtLogin: launchAtLoginService,
+        audioInput: audioInput
       )
     }
     settingsWindowController?.show()

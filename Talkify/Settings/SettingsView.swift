@@ -11,6 +11,7 @@ struct SettingsView: View {
   let usageTracker: UsageTracker
   let updater: SparkleUpdaterService
   let launchAtLogin: LaunchAtLoginService
+  let audioInput: AudioInputController
   let onClose: () -> Void
 
   @Environment(\.colorSchemeContrast) private var contrast
@@ -26,6 +27,7 @@ struct SettingsView: View {
     usageTracker: UsageTracker,
     updater: SparkleUpdaterService,
     launchAtLogin: LaunchAtLoginService,
+    audioInput: AudioInputController,
     initialSection: SettingsSection = .appearance,
     onClose: @escaping () -> Void
   ) {
@@ -36,6 +38,7 @@ struct SettingsView: View {
     self.usageTracker = usageTracker
     self.updater = updater
     self.launchAtLogin = launchAtLogin
+    self.audioInput = audioInput
     self.onClose = onClose
     _selectedSection = State(initialValue: initialSection)
   }
@@ -44,7 +47,7 @@ struct SettingsView: View {
     VStack(spacing: 0) {
       SettingsHeader(onClose: onClose)
 
-      if runtimeState.isDictating && selectedSection != .insights {
+      if runtimeState.isDictating && selectedSection != .insights && selectedSection != .dictation {
         ActiveSessionNotice()
       }
 
@@ -64,7 +67,8 @@ struct SettingsView: View {
             runtimeState: runtimeState,
             recognizers: recognizers,
             updater: updater,
-            launchAtLogin: launchAtLogin
+            launchAtLogin: launchAtLogin,
+            audioInput: audioInput
           )
           .id(selectedSection)
           .transition(.opacity)
@@ -98,6 +102,27 @@ struct SettingsView: View {
     .tint(SettingsTheme.accent)
     .preferredColorScheme(.dark)
     .onExitCommand(perform: onClose)
+    .task(id: shouldMonitorInput ? runtimeState.settingsPresentation : nil) {
+      if shouldMonitorInput {
+        await audioInput.startMonitoring()
+      } else {
+        audioInput.stopMonitoring()
+      }
+    }
+    .onDisappear { audioInput.stopMonitoring() }
+    .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+      guard shouldMonitorInput else { return }
+      audioInput.stopMonitoring()
+      audioInput.refresh()
+      Task { @MainActor in
+        guard shouldMonitorInput else { return }
+        await audioInput.startMonitoring()
+      }
+    }
+  }
+
+  private var shouldMonitorInput: Bool {
+    runtimeState.isSettingsVisible && selectedSection == .dictation
   }
 }
 
@@ -257,6 +282,7 @@ private struct SettingsContent: View {
   let recognizers: RecognizerStore
   let updater: SparkleUpdaterService
   let launchAtLogin: LaunchAtLoginService
+  let audioInput: AudioInputController
 
   @Environment(\.colorSchemeContrast) private var contrast
 
@@ -279,7 +305,7 @@ private struct SettingsContent: View {
         case .sounds:
           SoundsSettingsView(settings: settings, sounds: sounds)
         case .dictation:
-          DictationSettingsView(settings: settings)
+          DictationSettingsView(settings: settings, audioInput: audioInput, isDictating: runtimeState.isDictating)
         case .promptShaping:
           PromptShapingSettingsView(settings: settings)
         case .dropTranscription:
@@ -323,6 +349,7 @@ private struct SettingsContent: View {
     // than reaching for the network.
     updater: SparkleUpdaterService(),
     launchAtLogin: LaunchAtLoginService(),
+    audioInput: AudioInputController(settings: settings, observeHardware: false),
     onClose: {}
   )
 }

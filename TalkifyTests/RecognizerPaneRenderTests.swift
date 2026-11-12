@@ -75,6 +75,7 @@ struct RecognizerPaneRenderTests {
       )),
       updater: SparkleUpdaterService(),
       launchAtLogin: LaunchAtLoginService(),
+      audioInput: AudioInputController(settings: settings, observeHardware: false),
       initialSection: .recognizer,
       onClose: {}
     )

@@ -106,13 +106,18 @@ final class RecognizerFeed: Sendable {
   }
 
   /// The live capture: the Mac's microphone.
-  static let microphone: StartCapture = { format, feed, failureHandler, levelHandler in
-    let input = MicrophoneInput(
-      feed: feed,
-      failureHandler: { failureHandler($0.localizedDescription) },
-      levelHandler: levelHandler
-    )
-    try input.start(outputFormat: format)
-    return { input.stop() }
+  static let microphone: StartCapture = microphone(route: nil)
+
+  static func microphone(route: AudioInputRoute?) -> StartCapture {
+    { format, feed, failureHandler, levelHandler in
+      let input = MicrophoneInput(
+        feed: feed,
+        failureHandler: { failureHandler($0.localizedDescription) },
+        levelHandler: levelHandler,
+        route: route
+      )
+      try input.start(outputFormat: format)
+      return { input.stop() }
+    }
   }
 }

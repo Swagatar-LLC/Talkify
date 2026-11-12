@@ -13,6 +13,7 @@ import Observation
 @Observable
 final class AppSettings {
   private enum Keys {
+    static let preferredAudioInputUID = "preferredAudioInputUID"
     static let soundSet = "dictationSoundSet"
     static let soundsEnabled = "dictationSoundsEnabled"
     static let duckOtherAudio = "duckOtherAudioWhileDictating"
@@ -52,6 +53,11 @@ final class AppSettings {
 
   @ObservationIgnored
   private let defaults: UserDefaults
+
+  /// Nil follows System; a missing device's UID stays stored for reconnection.
+  var preferredAudioInputUID: String? {
+    didSet { defaults.set(preferredAudioInputUID, forKey: Keys.preferredAudioInputUID) }
+  }
 
   var soundSet: DictationSoundSet {
     didSet { defaults.set(soundSet.rawValue, forKey: Keys.soundSet) }
@@ -332,6 +338,7 @@ final class AppSettings {
 
   init(defaults: UserDefaults = .standard) {
     self.defaults = defaults
+    preferredAudioInputUID = defaults.string(forKey: Keys.preferredAudioInputUID)
     soundSet = Self.stored(in: defaults, key: Keys.soundSet) ?? .synth8
     dictationSoundsEnabled = defaults.object(forKey: Keys.soundsEnabled) as? Bool ?? true
     duckOtherAudioWhileDictating = defaults.object(forKey: Keys.duckOtherAudio) as? Bool ?? false

@@ -12,9 +12,11 @@ private final class TalkifySettingsWindow: NSWindow {
 
 /// Owns one fixed, borderless Settings surface for the app's lifetime.
 @MainActor
-final class SettingsWindowController: NSWindowController {
+final class SettingsWindowController: NSWindowController, NSWindowDelegate {
   private static let windowSize = NSSize(width: 860, height: 600)
   private var hasPositionedWindow = false
+  private var audioInput: AudioInputController?
+  private var runtimeState: SettingsRuntimeState?
 
   convenience init(
     settings: AppSettings,
@@ -23,7 +25,8 @@ final class SettingsWindowController: NSWindowController {
     recognizers: RecognizerStore,
     usageTracker: UsageTracker,
     updater: SparkleUpdaterService,
-    launchAtLogin: LaunchAtLoginService
+    launchAtLogin: LaunchAtLoginService,
+    audioInput: AudioInputController
   ) {
     let window = TalkifySettingsWindow(
       contentRect: NSRect(origin: .zero, size: Self.windowSize),
@@ -40,6 +43,7 @@ final class SettingsWindowController: NSWindowController {
         usageTracker: usageTracker,
         updater: updater,
         launchAtLogin: launchAtLogin,
+        audioInput: audioInput,
         onClose: { [weak window] in window?.close() }
       )
     )
@@ -57,6 +61,9 @@ final class SettingsWindowController: NSWindowController {
     window.maxSize = Self.windowSize
     window.setContentSize(Self.windowSize)
     self.init(window: window)
+    self.audioInput = audioInput
+    self.runtimeState = runtimeState
+    window.delegate = self
   }
 
   func show() {
@@ -67,6 +74,13 @@ final class SettingsWindowController: NSWindowController {
     }
     NSApp.activate(ignoringOtherApps: true)
     window.makeKeyAndOrderFront(nil)
+    if runtimeState?.isSettingsVisible == false { runtimeState?.settingsPresentation += 1 }
+    runtimeState?.isSettingsVisible = true
+  }
+
+  func windowWillClose(_ notification: Notification) {
+    runtimeState?.isSettingsVisible = false
+    audioInput?.stopMonitoring()
   }
 
   private func positionOnPointerDisplay(_ window: NSWindow) {

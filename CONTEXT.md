@@ -255,9 +255,10 @@ _Avoid_: Transcript history, cloud analytics
 - Onboarding installs the Apple-managed language asset only when it is missing and waits for completion
 - Talkify uses Apple Speech by default and as every session's fallback. On the Swagatar fork a user may download one **Catalog Model**, Whisper large-v3-turbo, and pick it as the **Recognizer**; upstream remains Apple Speech only, with no Whisper (ADR-9001)
 - Language selectors show only locales supported by Apple Speech
-- Version 1 uses the current macOS default microphone
-- Talkify follows system input-device changes between sessions; a device change during an active session may end that session
-- Version 1 has no microphone device picker
+- The Swagatar fork defaults to System input, following whichever microphone macOS currently selects; an explicit input preference stores the device's persistent Core Audio UID (fork ADR-9002)
+- A missing preferred input falls back to System without changing its saved preference, and reconnecting it restores the preferred route automatically; Settings exposes preferred and effective selection separately
+- Input selection and hardware changes apply without relaunching; a device change during an active session rebuilds capture but may end that session if the hardware cannot supply a usable route
+- Settings → Dictation shows a live input-level meter for the effective input, including System fallback, only while that section is visible. Its idle level-only capture yields to Direct Dictation and reuses the session's levels; closing the section or window releases idle capture without interrupting dictation
 - Onboarding requests microphone, speech recognition, and Accessibility permissions
 - **Live Captions** requests system-audio permission only when first used
 - **Direct Dictation** refuses to record for a focused secure password field and shows “Secure field”
