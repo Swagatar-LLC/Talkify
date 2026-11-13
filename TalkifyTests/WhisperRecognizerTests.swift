@@ -1,6 +1,7 @@
 import AVFAudio
 import Foundation
 import Testing
+import os
 
 @testable import Talkify
 
@@ -63,6 +64,219 @@ struct VoiceActivityGateTests {
       #expect(heard == gate.containsSpeech(session, sampleRate: rate))
       #expect(detector.hasHeardSpeech == heard)
     }
+  }
+}
+
+struct WhisperRecognizerDraftTests {
+  private func makeRecognizer(
+    transcribe: @escaping WhisperRecognizer.Decode = { _, _, _ in "draft" }
+  ) throws -> WhisperRecognizer {
+    let model = try #require(try Catalog.bundled().models.first { $0.runtime.id == WhisperRecognizer.runtimeID })
+    return WhisperRecognizer(model: model, tokenize: { Array(repeating: 1, count: $0.count) }, transcribe: transcribe)
+  }
+
+  private func audio(seconds: Double = 1, value: Float = 0.1) -> AVAudioPCMBuffer {
+    let count = AVAudioFrameCount(seconds * WhisperRecognizer.sampleRate)
+    let buffer = AVAudioPCMBuffer(pcmFormat: WhisperRecognizer.format, frameCapacity: count)!
+    buffer.frameLength = count
+    buffer.floatChannelData![0].update(repeating: value, count: Int(count))
+    return buffer
+  }
+
+  @Test func cancelledDraftsCannotPublishIntoTheNextSession() async throws {
+    let state = OSAllocatedUnfairLock(initialState: (active: 0, maximum: 0, calls: 0, oldTexts: [String](), newTexts: [String]()))
+    let recognizer = try makeRecognizer { _, _, _ in
+      let call = state.withLock { state in
+        state.active += 1
+        state.maximum = max(state.maximum, state.active)
+        state.calls += 1
+        return state.calls
+      }
+      try await Task.sleep(for: .milliseconds(100))
+      state.withLock { $0.active -= 1 }
+      return "draft \(call)"
+    }
+    try await recognizer.start(locale: Locale(identifier: "en"), updateHandler: { update in
+      state.withLock { $0.oldTexts.append(update.volatileText) }
+    }, beginFeeding: { _ in })
+    #expect(recognizer.feed(audio()))
+    for _ in 0..<100 {
+      if state.withLock({ $0.active == 1 }) { break }
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    #expect(state.withLock { $0.active == 1 })
+    await recognizer.cancel()
+    try await recognizer.start(locale: Locale(identifier: "en"), updateHandler: { update in
+      state.withLock { $0.newTexts.append(update.volatileText) }
+    }, beginFeeding: { _ in })
+    #expect(recognizer.feed(audio()))
+    for _ in 0..<100 {
+      if state.withLock({ $0.newTexts.contains("draft 2") }) { break }
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    #expect(state.withLock { $0.oldTexts.allSatisfy(\.isEmpty) })
+    #expect(state.withLock { $0.newTexts == ["", "draft 2"] })
+    #expect(state.withLock { $0.maximum == 1 })
+    await recognizer.cancel()
+  }
+
+  @Test func silenceAndSubthresholdAudioNeverInvokeTheDecoder() async throws {
+    let calls = OSAllocatedUnfairLock(initialState: 0)
+    let recognizer = try makeRecognizer { _, _, _ in
+      calls.withLock { $0 += 1 }
+      return "hallucination"
+    }
+    try await recognizer.start(locale: Locale(identifier: "en"), updateHandler: { _ in }, beginFeeding: { _ in })
+    #expect(recognizer.feed(audio(value: 0)))
+    #expect(recognizer.feed(audio(value: 0.001)))
+    #expect(try await recognizer.finish() == "")
+    #expect(calls.withLock { $0 == 0 })
+  }
+
+  @Test func repeatedDraftsUseRecentAudioWhileFinishKeepsTheFullSession() async throws {
+    let calls = OSAllocatedUnfairLock(initialState: [(count: Int, first: Float)]())
+    let recognizer = try makeRecognizer { samples, _, _ in
+      calls.withLock { $0.append((samples.count, samples[0])) }
+      return "text"
+    }
+    try await recognizer.start(locale: Locale(identifier: "en"), updateHandler: { _ in }, beginFeeding: { _ in })
+    #expect(recognizer.feed(audio(seconds: 15, value: 0.1)))
+    try await Task.sleep(for: .milliseconds(100))
+    #expect(calls.withLock { $0.count == 1 })
+    #expect(recognizer.feed(audio(seconds: 15, value: 0.2)))
+    try await Task.sleep(for: .milliseconds(100))
+    #expect(calls.withLock { $0.count == 2 })
+    #expect(try await recognizer.finish() == "text")
+    #expect(calls.withLock { $0.map(\.count) == [96_000, 96_000, 496_000] })
+    #expect(calls.withLock { $0.map(\.first) == [0.1, 0.2, 0.1] })
+  }
+
+  @Test func vocabularyBudgetAndLanguageReachBothDraftAndFinalDecode() async throws {
+    let options = OSAllocatedUnfairLock(initialState: [(tokens: [Int], language: String?)]())
+    let recognizer = try makeRecognizer { _, language, tokens in
+      options.withLock { $0.append((tokens ?? [], language)) }
+      return "text"
+    }
+    await recognizer.setHints(Array(repeating: "Vocabulary", count: 100))
+    let planned = await recognizer.promptTokens
+    #expect((planned?.count ?? 0) <= 93)
+    #expect(planned?.isEmpty == false)
+    try await recognizer.start(locale: Locale(identifier: "en_US"), updateHandler: { _ in }, beginFeeding: { _ in })
+    #expect(recognizer.feed(audio()))
+    try await Task.sleep(for: .milliseconds(100))
+    #expect(try await recognizer.finish() == "text")
+    #expect(options.withLock { $0.count == 2 })
+    #expect(options.withLock { $0.allSatisfy { $0.tokens == planned && $0.language == "en" } })
+  }
+
+  @Test func sessionDurationCapStillRejectsLaterAudio() async throws {
+    let sizes = OSAllocatedUnfairLock(initialState: [Int]())
+    let recognizer = try makeRecognizer { samples, _, _ in
+      sizes.withLock { $0.append(samples.count) }
+      return "text"
+    }
+    try await recognizer.start(locale: Locale(identifier: "en"), updateHandler: { _ in }, beginFeeding: { _ in })
+    #expect(recognizer.feed(audio(seconds: WhisperRecognizer.maximumSessionDuration)))
+    #expect(!recognizer.feed(audio(seconds: 0.01)))
+    #expect(try await recognizer.finish() == "text")
+    #expect(sizes.withLock { $0.last == 9_616_000 })
+    #expect(sizes.withLock { $0.dropLast().allSatisfy { $0 <= 96_000 } })
+  }
+
+  @Test func aDraftFailureDoesNotPreventFinalTranscription() async throws {
+    let calls = OSAllocatedUnfairLock(initialState: 0)
+    let recognizer = try makeRecognizer { _, _, _ in
+      let call = calls.withLock { $0 += 1; return $0 }
+      if call == 1 { throw CancellationError() }
+      return "complete"
+    }
+    try await recognizer.start(locale: Locale(identifier: "en"), updateHandler: { _ in }, beginFeeding: { _ in })
+    #expect(recognizer.feed(audio()))
+    try await Task.sleep(for: .milliseconds(100))
+    #expect(calls.withLock { $0 == 1 })
+    #expect(try await recognizer.finish() == "complete")
+  }
+
+  @Test func cancellingAFinishRejectsItsLateTextWithoutOverlappingTheNextSession() async throws {
+    let state = OSAllocatedUnfairLock(initialState: (active: 0, maximum: 0, calls: 0))
+    let recognizer = try makeRecognizer { _, _, _ in
+      let call = state.withLock { state in
+        state.active += 1
+        state.maximum = max(state.maximum, state.active)
+        state.calls += 1
+        return state.calls
+      }
+      try await Task.sleep(for: .milliseconds(200))
+      state.withLock { $0.active -= 1 }
+      return "result \(call)"
+    }
+    try await recognizer.start(locale: Locale(identifier: "en"), updateHandler: { _ in }, beginFeeding: { _ in })
+    #expect(recognizer.feed(audio(seconds: 0.3)))
+    let oldFinish = Task { try await recognizer.finish() }
+    for _ in 0..<100 {
+      if state.withLock({ $0.active == 1 }) { break }
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    #expect(state.withLock { $0.active == 1 })
+    await recognizer.cancel()
+    try await recognizer.start(locale: Locale(identifier: "en"), updateHandler: { _ in }, beginFeeding: { _ in })
+    #expect(recognizer.feed(audio(seconds: 0.3)))
+    #expect(try await recognizer.finish() == "result 2")
+    await #expect(throws: CancellationError.self) { try await oldFinish.value }
+    #expect(state.withLock { $0.maximum == 1 })
+  }
+
+  @Test func silenceAfterSpeechDoesNotDecodeTheOldWordsAgain() async throws {
+    let calls = OSAllocatedUnfairLock(initialState: 0)
+    let recognizer = try makeRecognizer { _, _, _ in
+      calls.withLock { $0 += 1 }
+      return "draft"
+    }
+    try await recognizer.start(locale: Locale(identifier: "en"), updateHandler: { _ in }, beginFeeding: { _ in })
+    #expect(recognizer.feed(audio()))
+    try await Task.sleep(for: .milliseconds(100))
+    #expect(calls.withLock { $0 == 1 })
+    #expect(recognizer.feed(audio(value: 0)))
+    try await Task.sleep(for: .milliseconds(100))
+    #expect(calls.withLock { $0 == 1 })
+    await recognizer.cancel()
+  }
+
+  @Test func finishWaitsForDraftAndStillDecodesAllSessionAudio() async throws {
+    let state = OSAllocatedUnfairLock(initialState: (active: 0, maximum: 0, sizes: [Int]()))
+    let recognizer = try makeRecognizer { samples, _, _ in
+      let call = state.withLock { state in
+        state.active += 1
+        state.maximum = max(state.maximum, state.active)
+        state.sizes.append(samples.count)
+        return state.sizes.count
+      }
+      try await Task.sleep(for: .milliseconds(250))
+      state.withLock { $0.active -= 1 }
+      return call == 1 ? "draft" : "complete"
+    }
+    try await recognizer.start(locale: Locale(identifier: "en"), updateHandler: { _ in }, beginFeeding: { _ in })
+    #expect(recognizer.feed(audio(seconds: 20)))
+    for _ in 0..<100 {
+      if state.withLock({ $0.active > 0 }) { break }
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    #expect(state.withLock { $0.active == 1 })
+    #expect(try await recognizer.finish() == "complete")
+    #expect(state.withLock { $0.maximum == 1 })
+    #expect(state.withLock { $0.sizes == [96_000, 336_000] })
+  }
+
+  @Test func speechPublishesAVolatileDraftBeforeFinish() async throws {
+    let updates = OSAllocatedUnfairLock<[SpeechRecognitionService.Update]>(initialState: [])
+    let recognizer = try makeRecognizer()
+    try await recognizer.start(locale: Locale(identifier: "en"), updateHandler: { update in
+      updates.withLock { $0.append(update) }
+    }, beginFeeding: { _ in })
+    #expect(recognizer.feed(audio()))
+    try await Task.sleep(for: .milliseconds(150))
+    #expect(updates.withLock { $0.contains { $0.finalizedText.isEmpty && $0.volatileText == "draft" } })
+    await recognizer.cancel()
   }
 }
 

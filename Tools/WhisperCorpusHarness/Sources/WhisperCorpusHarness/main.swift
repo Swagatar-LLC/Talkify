@@ -303,6 +303,10 @@ func run() async throws -> Bool {
 }
 
 do {
+  if arguments.contains("--replay") {
+    try await replay()
+    exit(0)
+  }
   exit(try await run() ? 0 : 1)
 } catch {
   fail("harness: \(error)")
