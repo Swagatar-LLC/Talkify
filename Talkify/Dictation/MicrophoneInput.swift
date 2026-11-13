@@ -2,7 +2,7 @@ import AVFAudio
 import Accelerate
 import AudioToolbox
 import AVFoundation
-import os
+import Synchronization
 
 final class MicrophoneInput: @unchecked Sendable {
   enum InputError: LocalizedError, Sendable {
@@ -10,6 +10,9 @@ final class MicrophoneInput: @unchecked Sendable {
     case permissionDenied
     case noFirstBuffer
     case routingFailed(OSStatus)
+    case captureFailed(OSStatus)
+    case captureOverflow
+    case invalidCaptureFormat
     case converterCreationFailed
     case conversionFailed(String)
     case analyzerBackpressure
@@ -24,6 +27,12 @@ final class MicrophoneInput: @unchecked Sendable {
         "The microphone started but supplied no audio. Check the microphone or choose another input."
       case let .routingFailed(status):
         "The selected microphone could not be opened (\(status))."
+      case let .captureFailed(status):
+        "Microphone capture failed (\(status))."
+      case .captureOverflow:
+        "Microphone capture could not keep up with incoming audio."
+      case .invalidCaptureFormat:
+        "The microphone supplied an unsupported audio format."
       case .converterCreationFailed:
         "The microphone audio format is unsupported."
       case let .conversionFailed(message):
@@ -110,307 +119,237 @@ final class MicrophoneInput: @unchecked Sendable {
     }
   }
 
-  /// Replaced rather than restarted when the audio route changes: the old
-  /// engine's input chain cannot re-initialise across a Bluetooth profile
-  /// switch, which fails with -10868.
-  private var audioEngine = AVAudioEngine()
-  /// Serialises route recovery off the notification thread.
   private let recoveryQueue = DispatchQueue(label: "com.tgomareli.Talkify.mic-recovery")
-  private var configurationObserver: (any NSObjectProtocol)?
-  private var routeObserver: (any NSObjectProtocol)?
   private let route: AudioInputRoute?
-  private var analyzerFormat: AVAudioFormat?
-  private var recovering = false
-  /// A route change that arrived while recovering. Dropping it would leave a
-  /// dead engine behind, and a headset settling its profile can post more
-  /// than one.
-  private var recoveryPending = false
-  /// Nil for level-only capture; otherwise feeds whichever Recognizer is active.
   private let feed: (@Sendable (AVAudioPCMBuffer) -> Bool)?
   private let failureHandler: @Sendable (InputError) -> Void
-  /// Normalized microphone level (0–1) per tap buffer, for the HUD's
-  /// voice-reactive visual. Called on the audio thread.
   private let levelHandler: (@Sendable (Float) -> Void)?
-  private let stateLock = NSLock()
-
+  private let operations: any AUHALNativeOperations
+  private let permission: @Sendable () -> Bool
+  private let defaultInput: @Sendable () throws -> AudioDeviceID?
+  private let startupTimeout: TimeInterval
+  private var capture: AUHALCapture?
+  private var converterBox: ConverterBox?
+  private var outputFormat: AVAudioFormat?
+  private var timer: DispatchSourceTimer?
+  private var routeObserver: (any NSObjectProtocol)?
   private var running = false
-  private var reportedFailure = false
+  private var unsafeRetirement = false
   private var captureGeneration: UInt64?
+  private var boundDevice: AudioDeviceID?
   private var startupDeadline = StartupDeadline()
+  private var firstBufferDeadline = ContinuousClock.now
+  private var nextFormatCheck = ContinuousClock.now
 
   init(
     feed: (@Sendable (AVAudioPCMBuffer) -> Bool)? = nil,
     failureHandler: @escaping @Sendable (InputError) -> Void,
     levelHandler: (@Sendable (Float) -> Void)? = nil,
-    route: AudioInputRoute? = nil
+    route: AudioInputRoute? = nil,
+    operations: any AUHALNativeOperations = LiveAUHALOperations(),
+    permission: @escaping @Sendable () -> Bool = {
+      let status = AVCaptureDevice.authorizationStatus(for: .audio)
+      return status != .denied && status != .restricted
+    },
+    defaultInput: @escaping @Sendable () throws -> AudioDeviceID? = {
+      try CoreAudioInputDevices.snapshot().defaultDeviceID
+    },
+    startupTimeout: TimeInterval = 10
   ) {
-    self.feed = feed
-    self.failureHandler = failureHandler
-    self.levelHandler = levelHandler
-    self.route = route
+    self.feed = feed; self.failureHandler = failureHandler; self.levelHandler = levelHandler
+    self.route = route; self.operations = operations; self.permission = permission
+    self.defaultInput = defaultInput; self.startupTimeout = startupTimeout
   }
 
   func start(outputFormat: AVAudioFormat) throws {
     try recoveryQueue.sync {
-      try startOnRecoveryQueue(outputFormat: outputFormat)
-    }
-  }
-
-  private func startOnRecoveryQueue(outputFormat: AVAudioFormat) throws {
-    if feed != nil { route?.setDictationActive(true) }
-    stateLock.withLock {
-      analyzerFormat = outputFormat
+      guard !unsafeRetirement else { throw InputError.unavailable }
+      guard !running else { return }
+      if feed != nil { route?.setDictationActive(true) }
+      self.outputFormat = outputFormat
       running = true
-      reportedFailure = false
+      do {
+        if let route {
+          routeObserver = NotificationCenter.default.addObserver(
+            forName: AudioInputRoute.didChange, object: route, queue: nil
+          ) { [weak self] _ in
+            self?.recoveryQueue.async { [weak self] in
+              guard let self, route.generation != captureGeneration || route.deviceID != boundDevice else { return }
+              rebuildCapture()
+            }
+          }
+        }
+        try openCapture()
+        let timer = DispatchSource.makeTimerSource(queue: recoveryQueue)
+        timer.schedule(deadline: .now(), repeating: .milliseconds(10))
+        timer.setEventHandler { [weak self] in self?.poll() }
+        self.timer = timer
+        timer.resume()
+      } catch {
+        retire()
+        route?.publish(.failed(error.localizedDescription), generation: captureGeneration)
+        if feed != nil, !unsafeRetirement { route?.setDictationActive(false) }
+        throw mapped(error)
+      }
     }
-    if let route {
-      routeObserver = NotificationCenter.default.addObserver(
-        forName: AudioInputRoute.didChange, object: route, queue: nil
-      ) { [weak self] _ in self?.recoverFromRouteChange() }
+  }
+
+  private func openCapture() throws {
+    // A route may change synchronously inside native startup. Never publish
+    // that obsolete unit as ready; bounded retries avoid spinning on churn.
+    for _ in 0..<3 {
+      try openCaptureAttempt()
+      guard let route else { return }
+      if route.generation == captureGeneration, route.deviceID == boundDevice { return }
+      guard capture?.close() != false else { unsafeRetirement = true; throw InputError.unavailable }
+      capture = nil
     }
+    throw InputError.unavailable
+  }
+
+  private func openCaptureAttempt() throws {
+    guard permission() else { throw InputError.permissionDenied }
+    captureGeneration = route?.beginCapture()
+    let device: AudioDeviceID?
+    if let route { device = try route.deviceIDForCapture() }
+    else { device = try defaultInput() }
+    guard let device else { throw InputError.unavailable }
+    _ = startupDeadline.begin()
+    guard let outputFormat else { throw InputError.unavailable }
+    converterBox = ConverterBox(outputFormat: outputFormat)
+    let made = AUHALCapture(operations: operations)
+    capture = made
+    try made.open(device: device)
+    boundDevice = device
+    firstBufferDeadline = ContinuousClock.now.advanced(by: .seconds(startupTimeout))
+    nextFormatCheck = ContinuousClock.now.advanced(by: .milliseconds(500))
+    if route == nil || (route?.generation == captureGeneration && route?.deviceID == device) {
+      route?.publish(.started, generation: captureGeneration)
+    }
+  }
+
+  private func rebuildCapture() {
+    guard running else { return }
+    guard capture?.close() != false else { fail(.unavailable); return }
+    capture = nil
+    do { try openCapture() } catch { fail(mapped(error)) }
+  }
+
+  /// Runs on the same serial queue as retirement. Conversion and feed delivery
+  /// finish before stop returns; a retired generation never reaches a Recognizer.
+  private func poll() {
+    guard running, let capture, let ring = capture.context else { return }
+    if let captureGeneration, route?.generation != captureGeneration { rebuildCapture(); return }
+    if let error = ring.failure { fail(mapped(error)); return }
     do {
-      try startCapturing(on: audioEngine, into: outputFormat)
-    } catch {
-      stateLock.withLock {
-        running = false
-        startupDeadline.cancel()
+      let format = capture.format
+      try drain(ring, format: format)
+      if ContinuousClock.now >= firstBufferDeadline,
+        startupDeadline.expire(generation: startupDeadline.generation) { fail(.noFirstBuffer); return }
+      if ContinuousClock.now >= nextFormatCheck {
+        nextFormatCheck = ContinuousClock.now.advanced(by: .milliseconds(500))
+        if route == nil, try defaultInput() != boundDevice {
+          rebuildCapture()
+          return
+        }
+        let hardware = try capture.hardwareFormat()
+        if hardware.mSampleRate != format.mSampleRate || hardware.mChannelsPerFrame != format.mChannelsPerFrame {
+          rebuildCapture()
+        }
       }
-      stopObservingConfigurationChanges()
-      stopObservingRouteChanges()
-      audioEngine.stop()
-      route?.publish(.failed(error.localizedDescription), generation: stateLock.withLock { captureGeneration })
-      if feed != nil { route?.setDictationActive(false) }
-      AppLog.audio.error(
-        "engine failed to start: \(error.localizedDescription, privacy: .public)"
-      )
-      throw error
-    }
-    AppLog.audio.info(
-      "capturing at \(self.audioEngine.inputNode.outputFormat(forBus: 0).sampleRate, privacy: .public) Hz"
-    )
+    } catch { fail(mapped(error)) }
   }
 
-  /// A format snapshot can be stale before tap installation. Leave negotiation
-  /// to the node; conversion follows the format of each delivered buffer.
-  private func startCapturing(on engine: AVAudioEngine, into outputFormat: AVAudioFormat) throws {
-    let generation = route?.beginCapture()
-    let startupGeneration = stateLock.withLock {
-      captureGeneration = generation
-      return startupDeadline.begin()
-    }
-    let authorization = AVCaptureDevice.authorizationStatus(for: .audio)
-    guard authorization != .denied, authorization != .restricted else {
-      throw InputError.permissionDenied
-    }
-    if let route {
-      guard var deviceID = try route.deviceIDForCapture() else { throw InputError.unavailable }
-      guard let unit = engine.inputNode.audioUnit else { throw InputError.unavailable }
-      let status = AudioUnitSetProperty(
-        unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
-        &deviceID, UInt32(MemoryLayout.size(ofValue: deviceID))
-      )
-      guard status == noErr else { throw InputError.routingFailed(status) }
-    }
-    let inputNode = engine.inputNode
-    let hardwareFormat = inputNode.inputFormat(forBus: 0)
-    guard Self.hasUsableHardwareInput(hardwareFormat) else {
-      throw InputError.unavailable
-    }
-    // Changing CurrentDevice is our own configuration change, not a failed
-    // running engine. Observe only after that write to avoid recovery loops.
-    observeConfigurationChanges(of: engine)
-    inputNode.removeTap(onBus: 0)
+  // An offline harness can drive the real consumer without waiting on timers.
+  func processPendingAudio() { recoveryQueue.sync { poll() } }
 
-    let converterBox = ConverterBox(outputFormat: outputFormat)
-    try Self.installTap(on: inputNode) { [weak self] buffer, _ in
-      self?.receive(buffer, converterBox: converterBox, generation: generation,
-        startupGeneration: startupGeneration)
-    }
-
-    engine.prepare()
-    do {
-      try engine.start()
-    } catch {
-      inputNode.removeTap(onBus: 0)
-      throw error
-    }
-    route?.publish(.started, generation: generation)
-    // This is a failure deadline, not a retry or a Bluetooth settling delay.
-    // Synchronous engine startup does not consume the post-start allowance.
-    recoveryQueue.asyncAfter(deadline: .now() + 10) { [weak self] in
-      guard let self else { return }
-      if let generation, route?.generation != generation { return }
-      let expired = stateLock.withLock {
-        running && startupDeadline.expire(generation: startupGeneration)
-      }
-      if expired {
-        reportFailure(.noFirstBuffer, generation: generation, startupGeneration: startupGeneration)
+  private func drain(_ ring: AUHALRing, format: AudioStreamBasicDescription) throws {
+    guard let box = converterBox else { throw InputError.unavailable }
+    var format = format
+    guard let inputFormat = AVAudioFormat(streamDescription: &format) else { throw InputError.unavailable }
+    try ring.drain { samples, frames in
+      if let captureGeneration, route?.generation != captureGeneration { return }
+      guard frames > 0 else { return }
+      startupDeadline.receive(frameCount: frames, generation: startupDeadline.generation)
+      guard let buffer = AVAudioPCMBuffer(pcmFormat: inputFormat, frameCapacity: frames),
+        let destination = buffer.mutableAudioBufferList.pointee.mBuffers.mData else { throw InputError.unavailable }
+      buffer.frameLength = frames
+      destination.copyMemory(from: samples, byteCount: Int(frames * format.mBytesPerFrame))
+      publishLevel(of: buffer, generation: captureGeneration)
+      if let feed {
+        let converted = try convert(buffer, using: box)
+        if let captureGeneration, route?.generation != captureGeneration { return }
+        if converted.frameLength > 0, !feed(converted) { throw InputError.analyzerBackpressure }
       }
     }
   }
 
-  private func observeConfigurationChanges(of engine: AVAudioEngine) {
-    stopObservingConfigurationChanges()
-    let observer = NotificationCenter.default.addObserver(
-      forName: .AVAudioEngineConfigurationChange,
-      object: engine,
-      queue: nil
-    ) { [weak self, weak engine] _ in
-      guard engine?.isRunning == false else { return }
-      AppLog.audio.notice("audio route changed; the engine has stopped itself")
-      self?.recoverFromRouteChange()
+  func stop() {
+    recoveryQueue.sync {
+      guard running else { return }
+      // Retain the ring across native disposal, then consume the final render
+      // that may have been in flight when stop began.
+      if let capture, let ring = capture.context {
+        let format = capture.format
+        if !capture.close() { unsafeRetirement = true }
+        else if let error = ring.failure { fail(mapped(error)); return }
+        else if captureGeneration == nil || route?.generation == captureGeneration {
+          do { try drain(ring, format: format) }
+          catch { fail(mapped(error)); return }
+        }
+      }
+      retire()
+      if unsafeRetirement {
+        route?.publish(.failed(InputError.unavailable.localizedDescription), generation: captureGeneration)
+        failureHandler(.unavailable)
+      } else {
+        route?.publish(.stopped, generation: captureGeneration)
+        if feed != nil { route?.setDictationActive(false) }
+      }
     }
-    stateLock.withLock { configurationObserver = observer }
   }
 
-  private func stopObservingConfigurationChanges() {
-    let observer = stateLock.withLock { () -> (any NSObjectProtocol)? in
-      defer { configurationObserver = nil }
-      return configurationObserver
-    }
-    if let observer { NotificationCenter.default.removeObserver(observer) }
-  }
-
-  private func stopObservingRouteChanges() {
+  private func retire() {
+    running = false
+    startupDeadline.cancel()
+    timer?.cancel(); timer = nil
     if let routeObserver { NotificationCenter.default.removeObserver(routeObserver) }
     routeObserver = nil
+    if capture?.close() == false { unsafeRetirement = true }
+    // A failed native barrier poisons the shared route until app restart;
+    // another owner must not open over a possibly live orphaned unit.
+    if unsafeRetirement { route?.invalidate() }
+    capture = nil
+    converterBox = nil
   }
 
-  /// AVAudioEngine stops itself when the audio hardware changes underneath it
-  /// and says so through this notification. Nothing else restarts it, so
-  /// without this a session that began just as a headset switched profile
-  /// listens to an engine that is no longer running: no levels, no words, and
-  /// no error to show for it.
-  private func recoverFromRouteChange() {
-    let shouldRecover = stateLock.withLock { () -> Bool in
-      guard running else { return false }
-      guard !recovering else {
-        recoveryPending = true
-        return false
-      }
-      recovering = true
-      return true
-    }
-    guard shouldRecover else { return }
-    scheduleRecovery()
+  private func fail(_ error: InputError) {
+    guard running else { return }
+    retire()
+    route?.publish(.failed(error.localizedDescription), generation: captureGeneration)
+    if feed != nil, !unsafeRetirement { route?.setDictationActive(false) }
+    failureHandler(error)
   }
 
-  private func scheduleRecovery() {
-    // Off the notification thread. No settle delay: a fresh engine starts
-    // cleanly straight away, and the -10868 that looked like it needed one
-    // came from restarting the old engine rather than from being early.
-    recoveryQueue.async { [weak self] in
-      guard let self else { return }
-      rebuildEngine()
-
-      // A change that arrived mid-rebuild describes hardware the new engine
-      // never saw, so it gets its own pass rather than being dropped.
-      let again = stateLock.withLock { () -> Bool in
-        guard running, recoveryPending else {
-          recovering = false
-          recoveryPending = false
-          return false
-        }
-        recoveryPending = false
-        return true
-      }
-      if again { scheduleRecovery() }
-    }
+  private func mapped(_ error: any Error) -> InputError {
+    if let error = error as? InputError { return error }
+    if case let AUHALCapture.Failure.status(status) = error { return .routingFailed(status) }
+    if case let AUHALCapture.Failure.render(status) = error { return .captureFailed(status) }
+    if case AUHALCapture.Failure.invalidFormat = error { return .invalidCaptureFormat }
+    if case AUHALCapture.Failure.overflow = error { return .captureOverflow }
+    return .unavailable
   }
 
-  private func rebuildEngine() {
-    let outputFormat = stateLock.withLock { () -> AVAudioFormat? in
-      guard running else { return nil }
-      return analyzerFormat
-    }
-    guard let outputFormat else { return }
-
-    // Do not retain the stopped engine across replacement startup. Its HAL
-    // resources survive stop(), and overlapping engines can reject a return
-    // from Bluetooth to built-in input with kAudioHardwareIllegalOperationError.
-    audioEngine.stop()
-    audioEngine.inputNode.removeTap(onBus: 0)
-
-    let engine = AVAudioEngine()
-    stateLock.withLock { audioEngine = engine }
-    do {
-      try startCapturing(on: engine, into: outputFormat)
-    } catch {
-      // Nothing else is coming. Ending the session with a reason beats
-      // leaving the shape up in front of a microphone that is not running.
-      reportFailure((error as? InputError) ?? .unavailable)
-    }
-  }
-
-  static func installTap(on node: AVAudioNode, block: @escaping AVAudioNodeTapBlock) throws {
-    // macOS 27 reports native tap rejection as NSError. The legacy overload
-    // raises an Objective-C exception, which Swift catch cannot contain.
-    #if compiler(>=6.4)
-    if #available(macOS 27.0, *) {
-      try node.__installTap(onBus: 0, bufferSize: 1_024, format: nil, error: (), block: block)
-      return
-    }
-    #endif
-    node.installTap(onBus: 0, bufferSize: 1_024, format: nil, block: block)
+  deinit {
+    timer?.cancel()
+    if let routeObserver { NotificationCenter.default.removeObserver(routeObserver) }
+    if capture?.close() == false { unsafeRetirement = true }
+    if feed != nil, running, !unsafeRetirement { route?.setDictationActive(false) }
+    if unsafeRetirement { route?.invalidate() }
   }
 
   static func hasUsableHardwareInput(_ format: AVAudioFormat) -> Bool {
     format.channelCount > 0 && format.sampleRate > 0
-  }
-
-  func stop() {
-    // Stop cannot interleave with replacement-engine startup and leave an
-    // unowned microphone running after the session has ended.
-    recoveryQueue.sync { stopOnRecoveryQueue() }
-  }
-
-  private func stopOnRecoveryQueue() {
-    let shouldStop = stateLock.withLock { () -> Bool in
-      guard running else { return false }
-      running = false
-      startupDeadline.cancel()
-      return true
-    }
-
-    guard shouldStop else { return }
-    stopObservingConfigurationChanges()
-    stopObservingRouteChanges()
-    let engine = stateLock.withLock { audioEngine }
-    engine.stop()
-    engine.inputNode.removeTap(onBus: 0)
-    route?.publish(.stopped, generation: stateLock.withLock { captureGeneration })
-    if feed != nil { route?.setDictationActive(false) }
-  }
-
-  deinit {
-    if let configurationObserver { NotificationCenter.default.removeObserver(configurationObserver) }
-    if let routeObserver { NotificationCenter.default.removeObserver(routeObserver) }
-    audioEngine.stop()
-    if feed != nil, running { route?.setDictationActive(false) }
-  }
-
-  private func receive(_ buffer: AVAudioPCMBuffer, converterBox: ConverterBox, generation: UInt64?,
-    startupGeneration: UInt64) {
-    if let generation, route?.generation != generation { return }
-    let acceptsBuffer = stateLock.withLock {
-      guard running, !reportedFailure, startupDeadline.generation == startupGeneration else { return false }
-      startupDeadline.receive(frameCount: buffer.frameLength, generation: startupGeneration)
-      return true
-    }
-    guard acceptsBuffer else { return }
-    publishLevel(of: buffer, generation: generation)
-    guard let feed, !stateLock.withLock({ reportedFailure }) else { return }
-    do {
-      let convertedBuffer = try convert(buffer, using: converterBox)
-      if !feed(convertedBuffer) {
-        reportFailure(.analyzerBackpressure, generation: generation, startupGeneration: startupGeneration)
-      }
-    } catch let error as InputError {
-      reportFailure(error, generation: generation, startupGeneration: startupGeneration)
-    } catch {
-      reportFailure(.conversionFailed(error.localizedDescription), generation: generation,
-        startupGeneration: startupGeneration)
-    }
   }
 
   private func convert(
@@ -448,7 +387,7 @@ final class MicrophoneInput: @unchecked Sendable {
     return outputBuffer
   }
 
-  /// RMS of the first channel (vDSP, so the audio thread barely notices)
+  /// RMS across the interleaved channels, computed on the consumer queue,
   /// mapped to 0–1 over a 50 dB window: a quiet room sits near zero and
   /// speech fills most of the range.
   private func publishLevel(of buffer: AVAudioPCMBuffer, generation: UInt64?) {
@@ -458,7 +397,7 @@ final class MicrophoneInput: @unchecked Sendable {
     else { return }
 
     let rms = vDSP.rootMeanSquare(
-      UnsafeBufferPointer(start: samples, count: Int(buffer.frameLength))
+      UnsafeBufferPointer(start: samples, count: Int(buffer.frameLength * buffer.format.channelCount))
     )
     let db = 20 * log10(max(rms, .leastNormalMagnitude))
     let level = min(1, max(0, (db + 50) / 50))
@@ -466,27 +405,4 @@ final class MicrophoneInput: @unchecked Sendable {
     route?.publish(.level(level), generation: generation)
   }
 
-  private func reportFailure(_ error: InputError, generation: UInt64? = nil,
-    startupGeneration: UInt64? = nil) {
-    // A retiring tap can finish conversion after its replacement has started.
-    // Validate and terminate on the same queue that opens replacement engines.
-    recoveryQueue.async { [weak self] in
-      guard let self else { return }
-      if let generation, route?.generation != generation { return }
-      let shouldReport = stateLock.withLock { () -> Bool in
-        guard running, !reportedFailure,
-          startupGeneration == nil || startupGeneration == startupDeadline.generation else { return false }
-        reportedFailure = true
-        startupDeadline.cancel()
-        return true
-      }
-
-      guard shouldReport else { return }
-      route?.publish(.failed(error.localizedDescription), generation: generation ?? stateLock.withLock { captureGeneration })
-      AppLog.audio.error(
-        "microphone failed: \(error.errorDescription ?? "unknown", privacy: .public)"
-      )
-      failureHandler(error)
-    }
-  }
 }

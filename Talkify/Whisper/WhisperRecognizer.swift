@@ -11,11 +11,8 @@ import os
 /// its downloader is switched off and the tokenizer is built here from the verified
 /// `tokenizer.json`, so its fall-back download from the Hugging Face Hub is never reached.
 ///
-/// Whisper hears a whole session at once rather than streaming, so a session posts no
-/// draft text: the words arrive when `finish` returns. It posts one update with no words
-/// once the voice-activity gate hears speech, so the session's no-speech timeout does not
-/// end a long one. Audio that never reaches the gate returns no text without running the
-/// model.
+/// Drafts repeatedly decode a bounded recent window; only `finish` decodes the whole
+/// session. Silence never reaches the model, and drafts never become insertion text.
 actor WhisperRecognizer: Recognizer {
   enum Failure: LocalizedError, Equatable, Sendable {
     /// The catalog entry is not one this runtime can load.
@@ -52,32 +49,55 @@ actor WhisperRecognizer: Recognizer {
   )!
   /// The longest session kept, in seconds; later audio is dropped and reported so.
   static let maximumSessionDuration: Double = 600
+  static let draftWindowDuration: Double = 5
+  static let draftInterval: Double = 1
 
   /// The catalog's runtime id for this adapter.
   static let runtimeID = "whisperkit"
 
   let model: CatalogModel
   let gate: VoiceActivityGate
-  private let kit: WhisperKit
-  private let tokenizer: any WhisperTokenizer
+  typealias Decode = @Sendable ([Float], String, [Int]?) async throws -> String
+  private enum Runtime {
+    case live(WhisperKit, any WhisperTokenizer)
+    case injected(@Sendable (String) -> [Int], Decode)
+  }
+  private let runtime: Runtime
   /// The prompt line the planner chose for the current hints, and its tokens.
   private(set) var prompt: String?
   private(set) var promptTokens: [Int]?
   private var activeLanguage = "en"
+  private var currentSessionID: UUID?
+  private var decoding = false
+  private var decodeWaiters: [CheckedContinuation<Void, Never>] = []
   /// One session's audio so far, and what the gate has made of it.
   private struct Session {
+    let id = UUID()
     var samples: [Float] = []
     var detector: VoiceActivityGate.Detector
+    var draftDetector: VoiceActivityGate.Detector
+    var draftPending = false
+    var draftedSampleCount = 0
     let updateHandler: @Sendable (SpeechRecognitionService.Update) -> Void
   }
   /// The session in flight, or nil outside one. Written on the audio thread.
   private let session = OSAllocatedUnfairLock<Session?>(initialState: nil)
 
+  init(
+    model: CatalogModel,
+    gate: VoiceActivityGate = VoiceActivityGate(),
+    tokenize: @escaping @Sendable (String) -> [Int],
+    transcribe: @escaping Decode
+  ) {
+    self.model = model
+    self.gate = gate
+    self.runtime = .injected(tokenize, transcribe)
+  }
+
   private init(model: CatalogModel, gate: VoiceActivityGate, kit: WhisperKit, tokenizer: any WhisperTokenizer) {
     self.model = model
     self.gate = gate
-    self.kit = kit
-    self.tokenizer = tokenizer
+    self.runtime = .live(kit, tokenizer)
   }
 
   /// Loads `model` from the folder `verifiedFolder` returns, which must re-hash every
@@ -123,9 +143,9 @@ actor WhisperRecognizer: Recognizer {
   /// Runs the model once on a second of silence, past the gate, so the first session
   /// does not pay for Core ML's first prediction.
   func prewarm() async throws {
-    _ = try await kit.transcribe(
-      audioArray: [Float](repeating: 0, count: Int(Self.sampleRate)) + Self.trailingPad,
-      decodeOptions: decodingOptions(language: model.languages.first ?? "en")
+    _ = try await decode(
+      [Float](repeating: 0, count: Int(Self.sampleRate)) + Self.trailingPad,
+      language: model.languages.first ?? "en"
     )
   }
 
@@ -137,8 +157,12 @@ actor WhisperRecognizer: Recognizer {
   /// `text` encoded as WhisperKit's own command line does: a leading space, and no
   /// special tokens. The planner's token budget is counted with this same encoding.
   private func encodePrompt(_ text: String) -> [Int] {
-    let specialTokenBegin = tokenizer.specialTokens.specialTokenBegin
-    return tokenizer.encode(text: " " + text).filter { $0 < specialTokenBegin }
+    switch runtime {
+    case .live(_, let tokenizer):
+      tokenizer.encode(text: " " + text).filter { $0 < tokenizer.specialTokens.specialTokenBegin }
+    case .injected(let tokenize, _):
+      tokenize(text)
+    }
   }
 
   func start(
@@ -153,11 +177,14 @@ actor WhisperRecognizer: Recognizer {
     }
     activeLanguage = language
     let detector = VoiceActivityGate.Detector(gate: gate, sampleRate: Self.sampleRate)
-    session.withLock { $0 = Session(detector: detector, updateHandler: updateHandler) }
+    let started = Session(detector: detector, draftDetector: detector, updateHandler: updateHandler)
+    currentSessionID = started.id
+    session.withLock { $0 = started }
     do {
       try beginFeeding(Self.format)
     } catch {
       session.withLock { $0 = nil }
+      currentSessionID = nil
       throw error
     }
   }
@@ -171,6 +198,7 @@ actor WhisperRecognizer: Recognizer {
     let frames = UnsafeBufferPointer(start: channel, count: Int(buffer.frameLength))
     let cap = Int(Self.maximumSessionDuration * Self.sampleRate)
     var heard: (@Sendable (SpeechRecognitionService.Update) -> Void)?
+    var draftID: UUID?
     let kept = session.withLockUnchecked { session in
       // A buffer with no session to hear it is dropped quietly, as Apple's path does.
       guard session != nil else { return true }
@@ -179,10 +207,40 @@ actor WhisperRecognizer: Recognizer {
       if !session!.detector.hasHeardSpeech, session!.detector.hear(frames) {
         heard = session!.updateHandler
       }
+      _ = session!.draftDetector.hear(frames)
+      if session!.draftDetector.hasHeardSpeech, !session!.draftPending,
+         session!.samples.count - session!.draftedSampleCount >= Int(Self.draftInterval * Self.sampleRate) {
+        session!.draftPending = true
+        draftID = session!.id
+      }
       return true
     }
     heard?(.init(finalizedText: "", volatileText: "", heardSpeech: true))
+    if let draftID { Task { await refreshDraft(id: draftID) } }
     return kept
+  }
+
+  private func refreshDraft(id: UUID) async {
+    let samples = session.withLock { session -> [Float]? in
+      guard session?.id == id else { return nil }
+      session!.draftedSampleCount = session!.samples.count
+      session!.draftDetector = VoiceActivityGate.Detector(gate: gate, sampleRate: Self.sampleRate)
+      return Array(session!.samples.suffix(Int(Self.draftWindowDuration * Self.sampleRate)))
+    }
+    guard let samples else { return }
+    defer {
+      session.withLock { session in
+        if session?.id == id { session!.draftPending = false }
+      }
+    }
+    guard gate.containsSpeech(samples, sampleRate: Self.sampleRate) else { return }
+    guard let text = try? await decode(
+      samples + Self.trailingPad, language: activeLanguage, sessionID: id, draft: true),
+          !text.isEmpty else { return }
+    let handler = session.withLock { session in
+      session?.id == id ? session?.updateHandler : nil
+    }
+    handler?(.init(finalizedText: "", volatileText: text, heardSpeech: false))
   }
 
   func finish() async throws -> String {
@@ -194,14 +252,41 @@ actor WhisperRecognizer: Recognizer {
     }
     guard ended.detector.hasHeardSpeech else { return "" }
 
-    let results = try await kit.transcribe(
-      audioArray: ended.samples + Self.trailingPad,
-      decodeOptions: decodingOptions(language: activeLanguage)
-    )
-    return results
-      .map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }
-      .filter { !$0.isEmpty }
-      .joined(separator: " ")
+    let text = try await decode(
+      ended.samples + Self.trailingPad, language: activeLanguage, sessionID: ended.id)
+    guard currentSessionID == ended.id else { throw CancellationError() }
+    try Task.checkCancellation()
+    return text
+  }
+
+  private func decode(
+    _ samples: [Float], language: String, sessionID: UUID? = nil, draft: Bool = false
+  ) async throws -> String {
+    let tokens = promptTokens
+    if decoding {
+      await withCheckedContinuation { decodeWaiters.append($0) }
+    } else {
+      decoding = true
+    }
+    defer {
+      if decodeWaiters.isEmpty { decoding = false } else { decodeWaiters.removeFirst().resume() }
+    }
+    try Task.checkCancellation()
+    if let sessionID {
+      guard currentSessionID == sessionID,
+            !draft || session.withLock({ $0?.id == sessionID }) else { throw CancellationError() }
+    }
+    // Cancellation cannot free the model until its actual prediction has returned.
+    switch runtime {
+    case .live(let kit, _):
+      return try await kit.transcribe(
+        audioArray: samples, decodeOptions: Self.decodingOptions(language: language, promptTokens: tokens))
+        .map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty }
+        .joined(separator: " ")
+    case .injected(_, let transcribe):
+      return try await transcribe(samples, language, tokens)
+    }
   }
 
   /// Silence added after the session's audio. WhisperKit stops decoding one second
@@ -212,10 +297,11 @@ actor WhisperRecognizer: Recognizer {
   private static let trailingPad = [Float](repeating: 0, count: Int(sampleRate))
 
   func cancel() async {
+    currentSessionID = nil
     session.withLock { $0 = nil }
   }
 
-  private func decodingOptions(language: String) -> DecodingOptions {
+  private static func decodingOptions(language: String, promptTokens: [Int]?) -> DecodingOptions {
     var options = DecodingOptions(
       task: .transcribe,
       language: language,

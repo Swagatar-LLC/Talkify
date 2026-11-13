@@ -1,23 +1,19 @@
-import AVFAudio
-import Foundation
+import AudioToolbox
+import Synchronization
 import Testing
 @testable import Talkify
 
 struct MicrophoneTapTests {
-  #if compiler(>=6.4)
-  @Test(.enabled(if: ProcessInfo.processInfo.isOperatingSystemAtLeast(
-    OperatingSystemVersion(majorVersion: 27, minorVersion: 0, patchVersion: 0))))
-  func rejectedTapReturnsAnErrorWithoutAbortingTheProcess() throws {
-    let engine = AVAudioEngine()
-    let mixer = AVAudioMixerNode()
-    engine.attach(mixer)
-    let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
-    // A detached mixer exercises native tap rejection without opening a device.
-    mixer.installTap(onBus: 0, bufferSize: 1_024, format: format) { _, _ in }
-    defer { mixer.removeTap(onBus: 0) }
-    #expect(throws: (any Error).self) {
-      try MicrophoneInput.installTap(on: mixer) { _, _ in }
-    }
+  @Test func oversizedNativeCallbackFailsWithoutRendering() throws {
+    let ring = AUHALRing(unit: AudioUnit(bitPattern: 1)!, maximum: 1024, channels: 1,
+      render: { _, _, _, _, _, _ in Issue.record("oversized callback rendered"); return -1 })
+    let token = try AUHALAdmission.make(ring)
+    defer { _ = token.state.bitwiseOr(1, ordering: .acquiringAndReleasing) }
+    let callback = makeAUHALCallback(token)
+    var flags: AudioUnitRenderActionFlags = []
+    var timestamp = AudioTimeStamp()
+    let status = callback.inputProc!(callback.inputProcRefCon!, &flags, &timestamp, 1, 1025, nil)
+    #expect(status == kAudioUnitErr_TooManyFramesToProcess)
+    #expect(ring.write.load(ordering: .acquiring) == 0)
   }
-  #endif
 }

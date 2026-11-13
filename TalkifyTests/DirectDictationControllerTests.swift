@@ -1,3 +1,4 @@
+import AVFAudio
 import Foundation
 import os
 import Testing
@@ -24,6 +25,7 @@ struct DirectDictationControllerTests {
     var messages: [String] = []
     var listeningLatched: [Bool] = []
     var listeningTags: [String?] = []
+    var liveTexts: [(finalized: String, volatile: String)] = []
     var insertedTexts: [String] = []
     var insertedDestinations: [InsertionDestination] = []
     var recordedSessions: [(wordCount: Int, speakingDuration: TimeInterval)] = []
@@ -167,7 +169,10 @@ struct DirectDictationControllerTests {
         recorder.listeningTags.append(languageTag)
       },
       showLatched: { recorder.events.append("showLatched") },
-      showLiveText: { _, _ in recorder.events.append("showLiveText") },
+      showLiveText: { finalized, volatile in
+        recorder.events.append("showLiveText")
+        recorder.liveTexts.append((finalized, volatile))
+      },
       showFinalizing: { recorder.events.append("showFinalizing") },
       showShaping: { name in
         recorder.events.append("showShaping")
@@ -1682,6 +1687,35 @@ struct DirectDictationControllerTests {
         "feed:16000", "feed:16000", "feed:16000", "stopCapture", "finish",
       ]
     )
+    controller.stop()
+  }
+
+  @Test func whisperDraftReachesTheHUDThroughTheControllerBeforeFinish() async throws {
+    let recorder = Recorder()
+    let prewarmed = OSAllocatedUnfairLock(initialState: false)
+    let model = try #require(try Catalog.bundled().models.first { $0.runtime.id == WhisperRecognizer.runtimeID })
+    let recognizer = WhisperRecognizer(model: model, tokenize: { _ in [] }, transcribe: { _, _, _ in "spoken words" })
+    let capture: RecognizerFeed.StartCapture = { format, feed, _, _ in
+      let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 16_000)!
+      buffer.frameLength = 16_000
+      buffer.floatChannelData![0].update(repeating: 0.1, count: 16_000)
+      #expect(feed(buffer))
+      return {}
+    }
+    let controller = makeController(dependencies: makeDependencies(
+      recorder: recorder, prewarmed: prewarmed,
+      recognition: RecognizerFeed(recognizer: recognizer, startCapture: capture)
+    ))
+    await prepare(controller, prewarmed: prewarmed)
+    controller.toggleFromMenu()
+    await waitUntil("Whisper draft never reached the HUD effect") {
+      recorder.liveTexts.contains { $0.finalized.isEmpty && $0.volatile == "spoken words" }
+    }
+    #expect(controller.sessionStateForTesting == .recording(.latched))
+    #expect(recorder.insertedTexts.isEmpty)
+    controller.toggleFromMenu()
+    await waitUntil("Finish never delivered") { !recorder.insertedTexts.isEmpty }
+    #expect(recorder.insertedTexts == ["spoken words"])
     controller.stop()
   }
 
